@@ -65,8 +65,11 @@ const EXPECT = [
   ["enabled,", null],
   ["-- a comment", "comment.line"],
   [`"GSMA Test Profile"`, "string.quoted.double"],
-  [`'89000123456789012341'H`, "string.quoted.other.hex"],
-  [`'1101'B`, "string.quoted.other.binary"],
+  /* An hstring is a value and not text, and colouring it as text put it and
+     the member names, 69 per cent of a real profile between them, in two
+     blues 19 apart in the Dark 2026 theme. */
+  [`'89000123456789012341'H`, "constant.numeric.hex"],
+  [`'1101'B`, "constant.numeric.binary"],
   ["NULL", "support.type"],
   ["OCTET STRING", "support.type"],
   ["[10]", "entity.other.attribute-name.tag"],
@@ -131,53 +134,73 @@ function scopeAt(lines, text) {
   }
 
   /*
-   * A scope is not a colour. Two scopes that a theme resolves to the same
-   * value look the same on screen, whatever the rules say, and that is the
-   * failure a reader actually sees: with the assignment reference coloured,
-   * `value1` and the alternative `header` sat next to each other in two blues
-   * nobody could tell apart.
+   * A scope is not a colour, and a colour is not a distinguishable colour.
+   * Two scopes a theme resolves near each other look the same on screen
+   * whatever the rules say, and that is the failure a reader sees. It has
+   * happened twice here: the assignment reference next to an alternative in
+   * two blues, and member names next to hex strings in two more.
    *
-   * Resolved against the editor's own default theme, so this needs VS Code
-   * installed and says so rather than passing quietly when it is not.
+   * Checked against every default dark theme, because they disagree. Dark
+   * Modern paints a string #CE9178 and Dark 2026 paints it #A5D6FF, which is
+   * 19 from the #9CDCFE of a member name. A pair that reads clearly in one is
+   * not evidence about the other.
    */
-  const c = themeColours();
-  if (!c) {
-    console.log("\nskip  no VS Code here, so the colours were not resolved");
-  } else {
+  for (const theme of ["dark_modern.json", "2026-dark.json"]) {
+    const c = themeColours(theme);
+    if (!c) {
+      console.log(`\nskip  no VS Code here, so ${theme} was not resolved`);
+      continue;
+    }
+    console.log(`\n${theme}`);
     /*
      * Third column is the family. Two things of one family may share a
-     * colour: a type reference and a builtin are both types, and VS Code's
-     * own theme paints `string` and a class name alike for that reason. Two
-     * families sharing one is the failure.
+     * colour: a type reference and a builtin are both types, and VS Code
+     * paints `string` and a class name alike for that reason. An hstring is
+     * a value, so it shares with a number by design.
      */
     const kinds = [
       ["a type", "ProfileElement", "type"],
       ["a builtin", "NULL", "type"],
-      /* The reference is module syntax and stays plain. Listed so that
-         colouring it again fails here too: variable.other.constant and
-         variable.other.enummember are the same #4FC1FF, and the two words
-         sit next to each other on the assignment line. */
+      /* Module syntax, and it stays plain. Listed so that colouring it again
+         fails here: variable.other.constant and variable.other.enummember
+         are one colour, and the two words share the assignment line. */
       ["the reference", "value1", "syntax"],
       ["an alternative", "header", "alternative"],
       ["a member", "profileType", "member"],
       ["a number", "2", "literal"],
-      ["a string", `"GSMA Test Profile"`, "literal"],
       ["a hex string", `'89000123456789012341'H`, "literal"],
+      ["a binary string", `'1101'B`, "literal"],
+      ["a string", `"GSMA Test Profile"`, "literal"],
       ["a comment", "-- a comment", "comment"],
     ];
-    const seen = new Map();
-    for (const [what, text, family] of kinds) {
-      const col = c(scopeAt(lines, text).split(","));
-      if (!seen.has(col)) seen.set(col, []);
-      seen.get(col).push({ what, text, family });
+    const at = new Map();
+    for (const [what, text, family] of kinds)
+      at.set(what, { col: c(scopeAt(lines, text).split(",")), family, text });
+
+    for (const [aName, a] of at) {
+      for (const [bName, b] of at) {
+        if (aName >= bName || a.family === b.family) continue;
+        const d = apart(a.col, b.col);
+        /*
+         * A real cstring is 3 runs in 4731 of a published profile, and
+         * TypeScript's own object keys sit the same 19 from a string in this
+         * theme. Recorded rather than hidden: it is accepted, not unseen.
+         */
+        const known = aName === "a member" && bName === "a string";
+        const bad = d < 40 && !known;
+        if (bad || d < 40)
+          console.log(`${bad ? "FAIL" : "ok  "} ${String(d).padStart(3)} apart` +
+            ` ${aName} ${a.col} and ${bName} ${b.col}` +
+            (known ? "  (accepted, and TypeScript is the same here)" : ""));
+        bad ? failed++ : ok++;
+      }
     }
-    for (const [col, group] of seen) {
-      const families = new Set(group.map((g) => g.family));
-      const clash = families.size > 1;
-      const names = group.map((g) => `${g.what} (${g.text})`).join(" and ");
-      console.log(`${clash ? "FAIL" : "ok  "} ${col} ${names}`);
-      clash ? failed++ : ok++;
+    const groups = new Map();
+    for (const [name, v] of at) {
+      if (!groups.has(v.col)) groups.set(v.col, []);
+      groups.get(v.col).push(name);
     }
+    for (const [col, g] of groups) console.log(`     ${col} ${g.join(", ")}`);
   }
 
   console.log(`\n${ok} ok, ${failed} failed`);
@@ -185,38 +208,80 @@ function scopeAt(lines, text) {
 })();
 
 /*
- * The default dark theme, as a function from a token's scopes to a colour.
- * dark_modern includes dark_plus includes dark_vs, so the files are read
- * innermost first and a later rule of the same length wins -- getting that
- * tie-break backwards reported enum members as the colour of a number.
+ * A theme, as a function from a token's scopes to a colour.
+ *
+ * Two mistakes in writing this, and each reported the wrong answer without
+ * looking wrong:
+ *
+ *   A selector may name ancestors. "string variable" is a variable inside a
+ *   string, not the two of them, and splitting it on whitespace produced a
+ *   bare `string` rule that overrode the real one. Every string came back as
+ *   the colour of the thing nested in one.
+ *
+ *   A selector matches any scope in the stack, not only the innermost, and
+ *   the deeper match wins. Checking only the innermost missed every rule a
+ *   theme writes against an outer scope, which is how Dark 2026 styles an
+ *   object member.
  */
-function themeColours() {
+function themeColours(file) {
   const dir =
     "/Applications/Visual Studio Code.app/Contents/Resources/app/" +
     "extensions/theme-defaults/themes/";
-  if (!fs.existsSync(dir + "dark_modern.json")) return null;
+  if (!fs.existsSync(dir + file)) return null;
 
   const rules = [];
   (function load(name) {
     const d = JSON.parse(fs.readFileSync(dir + name, "utf8"));
     if (d.include) load(d.include.replace("./", ""));
     for (const r of d.tokenColors ?? []) {
-      const scopes =
-        typeof r.scope === "string" ? r.scope.split(/[,\s]+/) : r.scope ?? [];
-      for (const s of scopes) if (s && r.settings.foreground)
-        rules.push({ scope: s, fg: r.settings.foreground.toUpperCase() });
+      if (!r.settings.foreground) continue;
+      const sel = typeof r.scope === "string" ? r.scope.split(",") : r.scope ?? [];
+      for (const one of sel) {
+        const parts = one.trim().split(/\s+/).filter(Boolean);
+        if (parts.length)
+          rules.push({ parts, fg: r.settings.foreground.toUpperCase() });
+      }
     }
-  })("dark_modern.json");
+  })(file);
+
+  const hits = (selector, scope) =>
+    scope === selector || scope.startsWith(selector + ".");
+
+  /* Dark 2026 sets editor.foreground; the older themes leave it to #D4D4D4. */
+  const plain = file.startsWith("2026") ? "#C9D1D9" : "#D4D4D4";
 
   return (scopes) => {
-    for (const sc of [...scopes].reverse()) {
-      let best = null;
-      let len = -1;
-      for (const r of rules)
-        if (sc === r.scope || sc.startsWith(r.scope + "."))
-          if (r.scope.length >= len) { best = r.fg; len = r.scope.length; }
-      if (best) return best;
+    let best = plain;
+    let rank = -1;
+    for (const r of rules) {
+      const last = r.parts[r.parts.length - 1];
+      let depth = -1;
+      for (let i = 0; i < scopes.length; i++) if (hits(last, scopes[i])) depth = i;
+      if (depth < 0) continue;
+      if (!r.parts.slice(0, -1).every((p) => scopes.some((s) => hits(p, s))))
+        continue;
+      const score = depth * 1000 + last.length;
+      if (score >= rank) { best = r.fg; rank = score; }
     }
-    return "#D4D4D4";
+    return best;
   };
+}
+
+/*
+ * How far apart two colours look, weighted for the eye rather than for the
+ * bytes: #9CDCFE and #A5D6FF differ in every channel and are still one colour
+ * to a reader. Below about 40 they cannot be told apart in running text.
+ */
+function apart(a, b) {
+  const ch = (h) => [1, 3, 5].map((i) => parseInt(h.substr(i, 2), 16));
+  const [r1, g1, b1] = ch(a);
+  const [r2, g2, b2] = ch(b);
+  const rm = (r1 + r2) / 2;
+  return Math.round(
+    Math.sqrt(
+      (2 + rm / 256) * (r1 - r2) ** 2 +
+        4 * (g1 - g2) ** 2 +
+        (2 + (255 - rm) / 256) * (b1 - b2) ** 2
+    )
+  );
 }

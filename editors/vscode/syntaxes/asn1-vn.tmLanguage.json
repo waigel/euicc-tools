@@ -65,12 +65,14 @@
       "name": "comment.block.asn1"
     },
     "hexstring": {
+      "comment": "X.680 12.12: an hstring denotes a value, not text. Quotes around it make it look like a string, and calling it one put 30 per cent of a real profile in the colour of prose -- next to the 39 per cent that are member names, which the Dark 2026 theme paints #9CDCFE against #A5D6FF for a string. Two thirds of a file in one indistinguishable blue. As a numeric constant it is #B5CEA8 in every default theme, which is also what it is.",
       "match": "'[0-9A-Fa-f\\s]*'[Hh]",
-      "name": "string.quoted.other.hex.asn1"
+      "name": "constant.numeric.hex.asn1"
     },
     "binstring": {
+      "comment": "X.680 12.11: a bstring, and a value for the same reason.",
       "match": "'[01\\s]*'[Bb]",
-      "name": "string.quoted.other.binary.asn1"
+      "name": "constant.numeric.binary.asn1"
     },
     "cstring": {
       "begin": "\"",
