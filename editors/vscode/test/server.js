@@ -23,16 +23,18 @@ const send = (msg) => {
 let buf = Buffer.alloc(0);
 let asked = false;
 let edited = false;
+let hovered = false;
 
-/* The same document, with a hex string where the second element wants an
-   identifier. Line 9 is the one it is on. */
+/* The same document, with a PE-MF that has no ef-iccid. The reader names the
+   member; the finding should also carry its type and the line of the ASN.1
+   that declares it. Line 3 holds iccid, for the hover. */
 const BAD =
   "value1 ProfileElement ::= header : {\n  major-version 2, minor-version 3,\n"
 + "  iccid '89000123456789012341'H,\n  eUICC-Mandatory-services { usim NULL },\n"
 + "  eUICC-Mandatory-GFSTEList { { 2 23 143 1 2 1 } }\n}\n"
 + "value2 ProfileElement ::= mf : {\n"
 + "  mf-header { mandated NULL, identification 1 },\n"
-+ "  templateID '2F0601'H\n}\n";
++ "  templateID { 2 23 143 1 2 1 }\n}\n";
 srv.stdout.on("data", (d) => {
   buf = Buffer.concat([buf, d]);
   for (;;) {
@@ -101,21 +103,42 @@ srv.stdout.on("data", (d) => {
         contentChanges: [{ text: BAD }] } });
     }
 
-    if (msg.method === "textDocument/publishDiagnostics" && edited) {
+    if (msg.method === "textDocument/publishDiagnostics" && edited && !hovered) {
       const d = msg.params.diagnostics;
       if (!d.length) return;
       const at = d[0].range.start;
       console.log(`  after an edit and no save: line ${at.line + 1} ` +
                   `column ${at.character + 1}  ${d[0].message}`);
-      if (!/wrong|string|expected/i.test(d[0].message)) {
-        console.log("FAIL: the wrong type was not reported");
+      /* The reader stops at the first one it wants, which is mf. */
+      if (!/missing mandatory member 'mf'/.test(d[0].message)) {
+        console.log("FAIL: the missing member was not reported"); process.exit(1);
+      }
+      /* The reader names the member; the schema names its type. */
+      if (!/of type File/.test(d[0].message)) {
+        console.log("FAIL: the finding was not given the member's type"); process.exit(1);
+      }
+      const rel = d[0].relatedInformation;
+      if (!rel || !/declared here/.test(rel[0].message) || !/\.asn$/.test(rel[0].location.uri)) {
+        console.log(`FAIL: no pointer to the declaration (${JSON.stringify(rel)})`);
         process.exit(1);
       }
-      if (at.line + 1 !== 9) {
-        console.log("FAIL: expected it on line 9, the line it is on");
+      console.log(`  related: ${rel[0].location.uri.split("/").pop()}` +
+                  `(${rel[0].location.range.start.line + 1})  ${rel[0].message}`);
+
+      hovered = true;
+      send({ jsonrpc: "2.0", id: 3, method: "textDocument/hover", params: {
+        textDocument: { uri: "file:///tmp/x.vn" },
+        position: { line: 2, character: 4 } } });
+    }
+
+    if (msg.id === 3) {
+      const v = msg.result && msg.result.contents && msg.result.contents.value;
+      console.log("  hover: " + String(v).split("\n").filter(Boolean).slice(0, 2).join(" | "));
+      if (!v || !/iccid/.test(v) || !/OCTET STRING/.test(v)) {
+        console.log("FAIL: hover did not name the member and its type");
         process.exit(1);
       }
-      console.log("\ndiagnostics, completion and checking as you type all answered");
+      console.log("\ndiagnostics, completion, checking as you type, related info and hover");
       process.exit(0);
     }
   }

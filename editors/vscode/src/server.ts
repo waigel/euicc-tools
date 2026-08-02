@@ -17,10 +17,8 @@
  */
 
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 
 import {
   CompletionItem,
@@ -28,6 +26,7 @@ import {
   createConnection,
   Diagnostic,
   DiagnosticSeverity,
+  DiagnosticRelatedInformation,
   DidChangeConfigurationNotification,
   InitializeParams,
   InsertTextFormat,
@@ -38,7 +37,14 @@ import {
 } from "vscode-languageserver/node";
 import { TextDocument } from "vscode-languageserver-textdocument";
 
-import { analyze, Schema, suggest } from "./schema";
+import {
+  analyze,
+  declarationLine,
+  describe,
+  memberAt,
+  Schema,
+  suggest,
+} from "./schema";
 
 interface Finding {
   severity: "error" | "warning";
@@ -85,6 +91,7 @@ connection.onInitialize((_params: InitializeParams) => ({
       triggerCharacters: ["{", ",", ":"],
       resolveProvider: false,
     },
+    hoverProvider: true,
   },
 }));
 
@@ -112,21 +119,26 @@ connection.onDidChangeConfiguration(async () => {
 });
 
 /*
- * euicc reads a file. An unsaved buffer has no file, so the text goes to a
- * temporary one. Checking the file on disk instead would report the state
- * before the edit, which is the state nobody is looking at.
+ * euicc reads standard input when it is given no file, so the buffer goes
+ * straight down the pipe. Checking the file on disk instead would report the
+ * state before the edit, which is the state nobody is looking at, and a
+ * temporary file would mean three filesystem calls for every pause in typing.
+ *
+ * The child is returned alongside the result so a superseded run can be
+ * killed rather than left to finish and answer about text nobody has any
+ * more.
  */
-async function runEuicc(text: string): Promise<Report | string> {
-  const dir = await mkdtemp(join(tmpdir(), "euicc-"));
-  const file = join(dir, "buffer.vn");
-  try {
-    await writeFile(file, text, "utf8");
-    const args = ["check", "--json", "-t"];
-    if (settings.rules) args.push("--rules", settings.rules);
-    args.push(file);
+function runEuicc(text: string): { done: Promise<Report | string>; kill: () => void } {
+  const args = ["check", "--json", "-t"];
+  if (settings.rules) args.push("--rules", settings.rules);
 
-    return await new Promise((resolve) => {
-      execFile(settings.path, args, { timeout: 20000 }, (err, stdout, stderr) => {
+  let child: ReturnType<typeof execFile> | undefined;
+  const done = new Promise<Report | string>((resolve) => {
+    child = execFile(
+      settings.path,
+      args,
+      { timeout: 20000, maxBuffer: 8 << 20 },
+      (err, stdout, stderr) => {
         // A non-zero exit means findings, not a failure to run. Only an empty
         // stdout says the command itself did not work.
         if (!stdout.trim()) {
@@ -141,18 +153,34 @@ async function runEuicc(text: string): Promise<Report | string> {
         } catch {
           resolve(`${settings.path} did not write JSON`);
         }
-      });
-    });
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
+      }
+    );
+    child.stdin?.end(text, "utf8");
+  });
+  return { done, kill: () => child?.kill() };
 }
+
+/*
+ * The run in flight for a document, so a newer one can end it. Without this
+ * the slower of two overlapping runs wins, and the editor shows findings
+ * about text that has since been rewritten. The TypeScript extension cancels
+ * its in-flight request on every edit for the same reason.
+ */
+const running = new Map<string, () => void>();
 
 async function check(doc: TextDocument): Promise<void> {
   if (doc.languageId !== "asn1-vn") return;
   if (settingsReady) await settingsReady;
 
-  const report = await runEuicc(doc.getText());
+  running.get(doc.uri)?.();
+  const version = doc.version;
+  const run = runEuicc(doc.getText());
+  running.set(doc.uri, run.kill);
+
+  const report = await run.done;
+  if (running.get(doc.uri) === run.kill) running.delete(doc.uri);
+  /* The buffer moved on while this ran; its answer is about the old text. */
+  if (doc.version !== version) return;
   if (typeof report === "string") {
     // The tool is missing or broke. Say so once, on the first line, rather
     // than leave the file looking clean.
@@ -170,6 +198,8 @@ async function check(doc: TextDocument): Promise<void> {
     return;
   }
 
+  const schema = await loadSchema();
+
   const diagnostics: Diagnostic[] = report.findings.map((f) => {
     const line = Math.max(0, f.line - 1);
     const character = Math.max(0, f.column - 1);
@@ -177,7 +207,7 @@ async function check(doc: TextDocument): Promise<void> {
       start: { line, character: 0 },
       end: { line: line + 1, character: 0 },
     });
-    return {
+    const d: Diagnostic = {
       severity:
         f.severity === "warning"
           ? DiagnosticSeverity.Warning
@@ -190,9 +220,68 @@ async function check(doc: TextDocument): Promise<void> {
       source: f.source ? `euicc (${f.source})` : "euicc",
       message: f.message,
     };
+    const extra = schema ? explain(schema, f.message) : null;
+    if (extra) {
+      d.message = extra.message;
+      if (extra.related) d.relatedInformation = [extra.related];
+    }
+    return d;
   });
 
   connection.sendDiagnostics({ uri: doc.uri, diagnostics });
+}
+
+/* ---- what a finding leaves out --------------------------------------------- */
+
+/*
+ * The reader names the type and the member it wanted and stops there, because
+ * that is all it knows. The schema knows the member's type and the ASN.1 file
+ * says where it is declared, and TypeScript reports both:
+ *
+ *     Property 'test' is missing in type '{}' but required in type 'Thing'.
+ *     thing.ts(2, 5): 'test' is declared here.
+ *
+ * The second line is a separate location, which LSP carries as related
+ * information. Adding it costs a text search of the schema source; if the
+ * file is not there or the search misses, the finding is passed through as it
+ * came and nothing is lost.
+ */
+function explain(
+  schema: Schema,
+  message: string
+): { message: string; related?: DiagnosticRelatedInformation } | null {
+  const m = /^(\S+) is missing mandatory member '([^']+)'/.exec(message);
+  if (!m) return null;
+  const [, type, name] = m;
+
+  const member = schema.types[type]?.members?.find((x) => x.name === name);
+  if (!member) return null;
+
+  const out = `${type} is missing mandatory member '${name}', of type ${member.type}`;
+  if (!schema.source) return { message: out };
+
+  let asn: string;
+  try {
+    asn = readFileSync(schema.source, "utf8");
+  } catch {
+    return { message: out };
+  }
+  const line = declarationLine(asn, type, name);
+  if (line === null) return { message: out };
+
+  return {
+    message: out,
+    related: {
+      location: {
+        uri: pathToFileURL(schema.source).toString(),
+        range: {
+          start: { line, character: 0 },
+          end: { line, character: asn.split("\n")[line].length },
+        },
+      },
+      message: `'${name}' is declared here`,
+    },
+  };
 }
 
 /* ---- completion ----------------------------------------------------------- */
@@ -265,14 +354,57 @@ const pending = new Map<string, NodeJS.Timeout>();
 function checkSoon(doc: TextDocument): void {
   const t = pending.get(doc.uri);
   if (t) clearTimeout(t);
+  /*
+   * A longer file is slower to check, so it waits longer before starting.
+   * The shape is the one the TypeScript extension uses, and its reasoning
+   * carries over unchanged:
+   *
+   *     Math.min(Math.max(Math.ceil(buffer.lineCount / 20), 300), 800)
+   *
+   * checkDelay sets the floor, so turning it down still bounds a large file
+   * rather than checking it on every keystroke.
+   */
+  const floor = Math.max(0, settings.checkDelay);
+  const delay = Math.min(Math.max(Math.ceil(doc.lineCount / 20), floor), 800);
   pending.set(
     doc.uri,
     setTimeout(() => {
       pending.delete(doc.uri);
       void check(doc);
-    }, Math.max(0, settings.checkDelay))
+    }, delay)
   );
 }
+
+/*
+ * What the name under the cursor is. TypeScript answers this from the type
+ * checker; the same answer is in the schema here, and it is the one thing a
+ * profile author cannot get from the file itself: whether a member may be
+ * left out, and what it is allowed to hold.
+ */
+connection.onHover(async (params) => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc || doc.languageId !== "asn1-vn") return null;
+  if (settingsReady) await settingsReady;
+
+  const schema = await loadSchema();
+  if (!schema) return null;
+
+  const found = memberAt(schema, doc.getText(), doc.offsetAt(params.position));
+  if (!found) return null;
+
+  const { member, owner, path } = found;
+  const head = `${member.name}: ${member.type}` +
+    (member.optional ? "  (optional)" : "");
+  const lines = [
+    "```asn1-vn",
+    head,
+    "```",
+    describe(member, owner),
+  ];
+  if (path.length > 1) lines.push(`\nIn \`${path.join(" / ")}\`.`);
+
+  return { contents: { kind: MarkupKind.Markdown, value: lines.join("\n") } };
+});
 
 documents.onDidSave((e) => void check(e.document));
 documents.onDidOpen((e) => void check(e.document));

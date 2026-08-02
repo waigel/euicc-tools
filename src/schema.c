@@ -47,6 +47,10 @@ VN_OPTAB(asn_OP_SET_OF);
 
 extern const vn_annotations_t vn_generated_annotations;
 
+#ifndef EUICC_SCHEMA_FILE
+#define EUICC_SCHEMA_FILE ""
+#endif
+
 /* ---- names --------------------------------------------------------------- */
 
 /*
@@ -270,6 +274,14 @@ cmd_schema(FILE *f) {
 
     fputs("{\n \"root\": ", f);
     json_string(f, e->name);
+    /*
+     * Where the schema is written down. Not where it is read from -- that is
+     * asn1c's descriptors, and stays so -- but an editor showing a member can
+     * point at the line that declares it, the way TypeScript points at a
+     * property's declaration.
+     */
+    fputs(",\n \"source\": ", f);
+    json_string(f, EUICC_SCHEMA_FILE);
     fputs(",\n \"types\": {\n", f);
 
     /*

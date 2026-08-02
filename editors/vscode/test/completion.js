@@ -28,7 +28,7 @@ buildSync({
   platform: "node",
   format: "cjs",
 });
-const { analyze, suggest } = require(out);
+const { analyze, suggest, memberAt, declarationLine } = require(out);
 
 const schema = JSON.parse(execFileSync(EUICC, ["schema"], { maxBuffer: 8 << 20 }));
 
@@ -198,6 +198,63 @@ check("the path names each brace it went through",
   ctx.path.join("/") === "akaParameter/algoConfiguration/algoParameter"
     ? true : `path was ${ctx.path.join("/")}`
 );
+
+/* ---- hover ---------------------------------------------------------------- */
+
+function hover(sample, verdict) {
+  const offset = sample.indexOf("|");
+  const text = sample.slice(0, offset) + sample.slice(offset + 1);
+  return memberAt(schema, text, offset);
+}
+
+function checkHover(what, sample, verdict) {
+  const f = hover(sample);
+  const why = verdict(f);
+  if (why === true) { console.log(`ok   ${what}`); pass++; }
+  else { console.log(`FAIL ${what}\n       ${why}\n       got ${JSON.stringify(f)}`); fail++; }
+}
+
+checkHover("a member under the cursor gives its type",
+  "value1 ProfileElement ::= header : {\n    icc|id '89'H\n}", (f) =>
+  f && f.member.name === "iccid" && f.member.type === "OCTET STRING"
+    && f.owner === "ProfileHeader" ? true : "expected ProfileHeader.iccid: OCTET STRING");
+
+checkHover("optional is carried to the hover",
+  "value1 ProfileElement ::= header : {\n    profile|Type \"x\"\n}", (f) =>
+  f && f.member.optional === true ? true : "profileType is OPTIONAL");
+
+checkHover("a CHOICE alternative resolves too",
+  "value1 ProfileElement ::= hea|der : {", (f) =>
+  f && f.member.name === "header" && f.owner === "ProfileElement"
+    ? true : "expected the alternative header of ProfileElement");
+
+checkHover("a named number reaches the hover",
+  "value1 ProfileElement ::= akaParameter : {\n" +
+  "    algoConfiguration algoParameter : {\n        algorith|mID 1\n", (f) =>
+  f && f.member.names && f.member.names.includes("milenage")
+    ? true : "expected the identifiers of algorithmID");
+
+checkHover("a word that names nothing gives nothing",
+  "value1 ProfileElement ::= header : {\n    nonsen|se 1\n}", (f) =>
+  f === null ? true : "should not invent a member");
+
+/* ---- the declaration a finding points at ---------------------------------- */
+
+const asn = require("node:fs").readFileSync(schema.source, "utf8");
+const decl = (t, m) => declarationLine(asn, t, m);
+const line = decl("PE-MF", "ef-iccid");
+if (line !== null && /^\s*ef-iccid\s/.test(asn.split("\n")[line])) {
+  console.log(`ok   the declaration of PE-MF.ef-iccid is found (line ${line + 1})`);
+  pass++;
+} else { console.log("FAIL the declaration of PE-MF.ef-iccid is found"); fail++; }
+
+if (decl("PE-MF", "ef-imsi") === null) {
+  console.log("ok   a member of another type is not claimed"); pass++;
+} else { console.log("FAIL a member of another type is not claimed"); fail++; }
+
+if (decl("NoSuchType", "x") === null) {
+  console.log("ok   an unknown type finds nothing"); pass++;
+} else { console.log("FAIL an unknown type finds nothing"); fail++; }
 
 console.log(`\n${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);

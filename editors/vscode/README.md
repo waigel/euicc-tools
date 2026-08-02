@@ -10,7 +10,8 @@ Interoperable Format*, version 3.4.1, which the industry calls SAIP.
 
 - Highlights `.vn` and `.asn1vn` files.
 - Offers the members allowed at the cursor, with their types.
-- Reports the errors that `euicc check` reports, in the editor.
+- Shows a member's type and whether it may be left out, on hover.
+- Reports the errors that `euicc check` reports, as you write them.
 
 A profile package fails in two ways. The ASN.1 module states what a value may
 hold: a type, a size, a range. The specification states in prose what a package
@@ -67,6 +68,11 @@ because there is no other token to point at and the object is what is wrong.
 
 A rule failure is marked on the first line of the profile element it belongs
 to, because a rule names an element and not a position in a file.
+
+A finding about a missing member also carries the member's type and a link to
+the line of the ASN.1 that declares it, the way TypeScript points at a
+property's declaration. Finding that line is a text search of the schema
+source, not a parse; a miss costs the link and nothing else.
 
 Completion finds the type at the cursor by following the member names through
 the open braces. It checks nothing: a suggestion in the wrong place is a wrong

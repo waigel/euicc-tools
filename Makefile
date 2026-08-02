@@ -40,8 +40,14 @@ XML_LIBS   := $(shell xml2-config --libs 2>/dev/null) \
               $(shell pkg-config --libs libxslt 2>/dev/null || echo -lxslt)
 
 INC := -Isrc -I$(VN)/include -I$(VN)/src -I$(SKELDIR) $(XML_CFLAGS)
+# The schema source, so `euicc schema` can say where a type is declared. Only
+# a location: the schema itself is read from asn1c's descriptors and never
+# from this file.
+ASN     := $(EPT)/profile-3.4.1.asn
+
 DEF := -DEUICC_RULES_DIR='"$(abspath $(RULES))"' \
-       -DEUICC_SKEL_DIR='"$(SKEL)"'
+       -DEUICC_SKEL_DIR='"$(SKEL)"' \
+       -DEUICC_SCHEMA_FILE='"$(abspath $(ASN))"'
 
 EXTRA :=
 ifeq ($(shell uname -s),Darwin)

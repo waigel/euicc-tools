@@ -38,6 +38,37 @@ export interface SchemaType {
 export interface Schema {
   root: string;
   types: Record<string, SchemaType>;
+  /* The ASN.1 file the schema is written in, for pointing at a declaration. */
+  source?: string;
+}
+
+/*
+ * The line a member is declared on, or null.
+ *
+ * A text search and not a parse: it finds the type's assignment and then the
+ * first line inside it that begins with the member's name. The schema itself
+ * comes from asn1c's descriptors and never from here, so a miss costs a link
+ * and nothing else -- which is why a search is enough and a second ASN.1
+ * parser would be too much.
+ */
+export function declarationLine(
+  asn: string,
+  type: string,
+  member: string
+): number | null {
+  const lines = asn.split("\n");
+  const head = new RegExp(`^${type.replace(/[-[\]{}()*+?.\\^$|]/g, "\\$&")}\\s*::=`);
+  const field = new RegExp(`^\\s*${member.replace(/[-[\]{}()*+?.\\^$|]/g, "\\$&")}\\s`);
+  let inside = false;
+  for (let i = 0; i < lines.length; i++) {
+    if (!inside) {
+      if (head.test(lines[i])) inside = true;
+      continue;
+    }
+    if (field.test(lines[i])) return i;
+    if (/^\}/.test(lines[i])) return null;
+  }
+  return null;
 }
 
 export interface Suggestion {
@@ -222,7 +253,35 @@ export function analyze(schema: Schema, text: string, offset: number): Context {
   };
 }
 
-function describe(m: Member, owner: string): string {
+/*
+ * The member the identifier under the cursor names, for a hover.
+ *
+ * The scan is the same one completion uses, run at the start of the word
+ * rather than at the cursor: what a word is follows from what was expected
+ * where it begins. Nothing expected there means it names a member of the type
+ * the braces hold; a CHOICE expected means it names one of its alternatives.
+ */
+export function memberAt(
+  schema: Schema,
+  text: string,
+  offset: number
+): { member: Member; owner: string; path: string[] } | null {
+  let start = offset;
+  while (start > 0 && WORD.test(text[start - 1])) start--;
+  let end = offset;
+  while (end < text.length && WORD.test(text[end])) end++;
+  const word = text.slice(start, end);
+  if (!word || !/^[a-z]/.test(word)) return null;
+
+  const ctx = analyze(schema, text, start);
+  const owner = ctx.expect ? ctx.expect.type : ctx.type;
+  if (!owner) return null;
+  const member = schema.types[owner]?.members?.find((m) => m.name === word);
+  if (!member) return null;
+  return { member, owner, path: [...ctx.path, word] };
+}
+
+export function describe(m: Member, owner: string): string {
   const opt = m.optional ? "optional" : "mandatory";
   let doc = `\`${owner}.${m.name}\`\n\n${m.type}, ${opt}.`;
   if (m.names?.length) {
