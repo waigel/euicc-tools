@@ -55,7 +55,7 @@ OWN_SRCS := src/main.c src/schematron.c src/diff.c
 VN_SRCS  := $(wildcard $(VN)/src/*.c)
 GEN_SRCS  = $(filter-out $(DIST)/converter-example.c, $(wildcard $(DIST)/*.c))
 
-.PHONY: all check clean distclean codec
+.PHONY: all check clean distclean codec install uninstall
 
 all: euicc
 
@@ -108,6 +108,21 @@ euicc: $(OWN_SRCS) src/euicc.h build/vn_annotations.c build/gen/.stamp
 
 check: euicc
 	./tests/run-tests
+
+# The rule set and the Schematron transforms are compiled in as absolute paths,
+# so an installed binary reads them where they are. Moving the checkout breaks
+# that; --rules and --skel override it.
+PREFIX ?= /usr/local
+
+install: euicc
+	@mkdir -p $(DESTDIR)$(PREFIX)/bin
+	install -m 755 euicc $(DESTDIR)$(PREFIX)/bin/euicc
+	@echo "installed $(DESTDIR)$(PREFIX)/bin/euicc"
+	@echo "rules:      $(abspath $(RULES))"
+	@echo "transforms: $(SKEL)"
+
+uninstall:
+	rm -f $(DESTDIR)$(PREFIX)/bin/euicc
 
 clean:
 	rm -rf build euicc

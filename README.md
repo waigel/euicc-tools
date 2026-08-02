@@ -61,7 +61,12 @@ every Linux distribution ship.
 
 ```sh
 make check
+make install PREFIX=~/.local     # or PREFIX=/usr/local with sudo
 ```
+
+The rule set and the Schematron transforms are compiled in as absolute paths, so
+an installed binary reads them where they are. Moving the checkout breaks that,
+and `--rules` and `--skel` override it.
 
 ## What it holds
 

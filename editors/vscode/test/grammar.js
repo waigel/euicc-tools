@@ -23,6 +23,7 @@ const SAMPLE = [
   `    profileType "GSMA Test Profile",`,
   `    iccid '89000123456789012341'H,`,
   `    eUICC-Mandatory-services { usim NULL },`,
+  `    eUICC-Mandatory-GFSTEList { { 2 23 143 1 2 1 } },`,
   `    flags '1101'B,`,
   `    lcsi [10] OCTET STRING OPTIONAL`,
   `}`,
@@ -47,6 +48,11 @@ const EXPECT = [
   ["OCTET STRING", "support.type"],
   ["[10]", "entity.other.attribute-name.tag"],
   ["OPTIONAL", "storage.type"],
+  /* A hyphen is a word boundary, so the capitalised part of a lower-case
+     identifier used to match the type-reference rule. */
+  ["eUICC-Mandatory-services", null],
+  ["Mandatory-services", null],
+  ["eUICC-Mandatory-GFSTEList", null],
 ];
 
 function scopeAt(lines, text) {

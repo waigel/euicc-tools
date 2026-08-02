@@ -94,8 +94,8 @@
       "name": "constant.numeric.asn1"
     },
     "typeref": {
-      "comment": "X.680 12.2: a type reference begins with an upper case letter",
-      "match": "\\b[A-Z][A-Za-z0-9-]*\\b",
+      "comment": "X.680 12.2: a type reference begins with an upper case letter. The lookbehind matters: a hyphen is a word boundary, so a plain \\b let this match Mandatory-services inside the field name eUICC-Mandatory-services, and the editor coloured half an identifier as a type.",
+      "match": "(?<![-\\w])[A-Z][A-Za-z0-9-]*",
       "name": "entity.name.class.asn1"
     }
   }
