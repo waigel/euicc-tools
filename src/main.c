@@ -21,6 +21,16 @@
 #include <libxml/xmlIO.h>
 #include <libxslt/xslt.h>
 
+/*
+ * Identifiers that asn1c parses and does not keep: INTEGER named numbers and
+ * BIT STRING named bits. vn-annotate recovers them and the build links the
+ * result; the library carries a weak empty table so a program without one
+ * still links. Handing it to the reader and the writer is what makes
+ * `algorithmID milenage` readable and what makes show print the name the
+ * specification prints rather than the number behind it.
+ */
+extern const vn_annotations_t vn_generated_annotations;
+
 #ifndef EUICC_RULES_DIR
 #define EUICC_RULES_DIR "vendor/saip-validator/rules"
 #endif
@@ -34,6 +44,20 @@
    JSON report want the same detail. */
 static char g_parse_error[512];
 static int g_parse_element;
+
+/*
+ * read_package records where the reader stopped instead of printing it,
+ * because check turns it into a finding and diff names the file it came from.
+ * Every other command has to say it out loud. Without this a rejected build
+ * exits 1 in silence, and silence reads as a tool that is broken rather than
+ * as a file that is wrong.
+ */
+static void
+report_parse_error(void) {
+    fprintf(stderr, "euicc: cannot read profile element %d: %s\n",
+            g_parse_element,
+            g_parse_error[0] ? g_parse_error : "not value notation");
+}
 
 /* ---- input --------------------------------------------------------------- */
 
@@ -117,6 +141,7 @@ read_package(const unsigned char *buf, size_t len, int as_text,
             ro.flags = VN_RF_EOF;
             ro.errbuf = reason;
             ro.errlen = sizeof reason;
+            ro.annotations = &vn_generated_annotations;
             rv = vn_decode(0, &asn_DEF_ProfileElement, (void **)&out[n], &ro,
                            buf + off, len - off);
             if(rv.code != RC_OK) {
@@ -232,7 +257,7 @@ cmd_build(const char *in, const char *out, int as_text) {
     int lines[MAX_PE];
     int n = read_package(buf, len, as_text, pe, lines, MAX_PE);
     free(buf);
-    if(n < 0) return 1;
+    if(n < 0) { report_parse_error(); return 1; }
 
     /* A value that breaks a SIZE or a range is caught before anything is
        written, so a rejected build leaves no half-correct file behind. */
@@ -275,10 +300,11 @@ cmd_show(const char *in, int as_text, int annotated) {
     int lines[MAX_PE];
     int n = read_package(buf, len, as_text, pe, lines, MAX_PE);
     free(buf);
-    if(n < 0) return 1;
+    if(n < 0) { report_parse_error(); return 1; }
 
     vn_options_t o = {0};
     o.mode = annotated ? VN_MODE_ANNOTATED : VN_MODE_PRETTY;
+    o.annotations = &vn_generated_annotations;
     for(int i = 0; i < n; i++) {
         printf("value%d ProfileElement ::= ", i + 1);
         if(vn_fprint(stdout, &asn_DEF_ProfileElement, pe[i], &o) < 0) return 1;
@@ -461,6 +487,7 @@ usage(void) {
         "  show     DER in, value notation out\n"
         "  check    either in, a verdict out\n"
         "  diff     what separates a source file from a package\n"
+        "  schema   the schema as JSON, for an editor\n"
         "\n"
         "options:\n"
         "  -o FILE     write here instead of to stdout\n"
@@ -511,6 +538,7 @@ main(int argc, char **argv) {
     else if(!strcmp(cmd, "show")) rc = cmd_show(in, as_text, annotated);
     else if(!strcmp(cmd, "check")) rc = cmd_check(in, as_text, rules, skel, strict, as_json);
     else if(!strcmp(cmd, "diff")) rc = cmd_diff(second, in);
+    else if(!strcmp(cmd, "schema")) rc = cmd_schema(stdout);
     else { usage(); rc = 2; }
 
     xsltCleanupGlobals();
