@@ -115,7 +115,16 @@ and evaluates no rule of its own, so the editor cannot report something that the
 build does not.
 
 ```sh
-cd editors/vscode && npm install && npm test
+cd editors/vscode
+npm install
+npm test        # the grammar and the server, without an editor
+npm run package # euicc-vn-0.1.0.vsix, 10 files
+```
+
+To install the package:
+
+```sh
+code --install-extension editors/vscode/euicc-vn-0.1.0.vsix
 ```
 
 `npm test` checks two things without an editor. It tokenises value notation and

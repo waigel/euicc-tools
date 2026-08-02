@@ -64,13 +64,17 @@
     }
   },
   "scripts": {
-    "compile": "tsc -p .",
-    "watch": "tsc -watch -p .",
-    "test": "npm run compile && node test/grammar.js && node test/server.js"
+    "compile": "tsc -p . --noEmit && node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "test": "npm run compile && node test/grammar.js && node test/server.js",
+    "package": "npm run compile -- --minify && vsce package",
+    "vscode:prepublish": "npm run compile -- --minify"
   },
   "devDependencies": {
     "@types/node": "^20",
     "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^3.2.0",
+    "esbuild": "^0.28.1",
     "typescript": "^5.4.0",
     "vscode-oniguruma": "^2.0.1",
     "vscode-textmate": "^9.1.0"
@@ -79,5 +83,21 @@
     "vscode-languageclient": "^9.0.1",
     "vscode-languageserver": "^9.0.1",
     "vscode-languageserver-textdocument": "^1.0.11"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/waigel/euicc-tools.git",
+    "directory": "editors/vscode"
+  },
+  "bugs": {
+    "url": "https://github.com/waigel/euicc-tools/issues"
+  },
+  "homepage": "https://euicc.waigel.com",
+  "keywords": [
+    "asn1",
+    "euicc",
+    "esim",
+    "saip",
+    "profile"
+  ]
 }

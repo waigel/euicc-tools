@@ -2,3 +2,6 @@ build/
 /euicc
 *.o
 *.dSYM/
+
+# the packaged extension
+editors/vscode/*.vsix
