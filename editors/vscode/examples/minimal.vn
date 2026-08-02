@@ -1,0 +1,16 @@
+-- A profile package with the two elements that every package must have.
+-- Open this file in VS Code with the extension loaded, move the second value
+-- above the first, and save: two ordering rules appear.
+
+value1 ProfileElement ::= header : {
+    major-version 2,
+    minor-version 3,
+    profileType "example",
+    iccid '89000123456789012341'H,
+    eUICC-Mandatory-services { usim NULL },
+    eUICC-Mandatory-GFSTEList { { 2 23 143 1 2 1 } }
+}
+
+value2 ProfileElement ::= end : {
+    end-header { mandated NULL, identification 99 }
+}

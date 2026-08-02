@@ -65,12 +65,15 @@
   },
   "scripts": {
     "compile": "tsc -p .",
-    "watch": "tsc -watch -p ."
+    "watch": "tsc -watch -p .",
+    "test": "npm run compile && node test/grammar.js && node test/server.js"
   },
   "devDependencies": {
     "@types/node": "^20",
     "@types/vscode": "^1.90.0",
-    "typescript": "^5.4.0"
+    "typescript": "^5.4.0",
+    "vscode-oniguruma": "^2.0.1",
+    "vscode-textmate": "^9.1.0"
   },
   "dependencies": {
     "vscode-languageclient": "^9.0.1",

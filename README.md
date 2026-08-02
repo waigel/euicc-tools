@@ -110,10 +110,20 @@ and evaluates no rule of its own, so the editor cannot report something that the
 build does not.
 
 ```sh
-cd editors/vscode && npm install && npm run compile
+cd editors/vscode && npm install && npm test
 ```
 
-Then open the folder in VS Code and press F5.
+`npm test` checks two things without an editor. It tokenises value notation and
+compares the scopes against what the grammar promises. It then drives the server
+over LSP with a package whose header is in the wrong place, and requires both
+ordering rules in the answer.
+
+To see it in an editor, open `editors/vscode` in VS Code and press F5. A window
+opens with the extension loaded. `examples/minimal.vn` is there to try: move the
+second value above the first and save.
+
+What the tests do not cover is the activation of the extension itself, which
+needs a running editor.
 
 The server speaks LSP over stdio, so it is not only for VS Code. Neovim and
 Helix start `node out/server.js --stdio` the same way.
