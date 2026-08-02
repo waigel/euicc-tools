@@ -25,21 +25,37 @@ const SAMPLE = [
   `    eUICC-Mandatory-services { usim NULL },`,
   `    eUICC-Mandatory-GFSTEList { { 2 23 143 1 2 1 } },`,
   `    flags '1101'B,`,
+  `    pinStatus enabled,`,
   `    lcsi [10] OCTET STRING OPTIONAL`,
   `}`,
 ];
 
 /*
  * Text to find, and the scope that its first character must carry. null means
- * the run is deliberately unstyled: an identifier stays plain here, the way a
- * property name does in TypeScript.
+ * the run is deliberately unstyled. A {not: scope} entry says only that one
+ * scope is wrong, for a case where what matters is what the text must not be
+ * taken for.
  */
+const KEY = "meta.object-literal.key";
+
 const EXPECT = [
   ["ProfileElement", "entity.name.class"],
   ["::=", "keyword.operator.assignment"],
-  ["header", null],
-  ["value1", null],
-  ["profileType", null],
+  ["value1", "variable.other.constant"],
+  /* Every member name, and a CHOICE alternative before its colon. These are
+     object literal keys and a theme colours them; leaving them plain left a
+     profile almost entirely white, because almost every word in one is a
+     member name. */
+  ["header", KEY],
+  ["major-version", KEY],
+  ["profileType", KEY],
+  ["usim", KEY],
+  ["eUICC-Mandatory-services", KEY],
+  ["eUICC-Mandatory-GFSTEList", KEY],
+  ["pinStatus", KEY],
+  /* An identifier that is itself the value stays plain, as one does in
+     TypeScript. The comma after it is what separates the two cases. */
+  ["enabled,", null],
   ["-- a comment", "comment.line"],
   [`"GSMA Test Profile"`, "string.quoted.double"],
   [`'89000123456789012341'H`, "string.quoted.other.hex"],
@@ -50,9 +66,8 @@ const EXPECT = [
   ["OPTIONAL", "storage.type"],
   /* A hyphen is a word boundary, so the capitalised part of a lower-case
      identifier used to match the type-reference rule. */
-  ["eUICC-Mandatory-services", null],
-  ["Mandatory-services", null],
-  ["eUICC-Mandatory-GFSTEList", null],
+  ["Mandatory-services", { not: "entity.name.class" }],
+  ["GFSTEList", { not: "entity.name.class" }],
 ];
 
 function scopeAt(lines, text) {
@@ -98,7 +113,12 @@ function scopeAt(lines, text) {
       failed++;
       continue;
     }
-    const pass = expect === null ? got === "" : got.includes(expect);
+    const pass =
+      expect === null
+        ? got === ""
+        : typeof expect === "object"
+          ? !got.includes(expect.not)
+          : got.includes(expect);
     console.log(`${pass ? "ok  " : "FAIL"} ${text.padEnd(26)} ${got || "(unstyled)"}`);
     pass ? ok++ : failed++;
   }

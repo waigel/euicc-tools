@@ -21,6 +21,7 @@ const send = (msg) => {
 };
 
 let buf = Buffer.alloc(0);
+let asked = false;
 srv.stdout.on("data", (d) => {
   buf = Buffer.concat([buf, d]);
   for (;;) {
@@ -32,7 +33,16 @@ srv.stdout.on("data", (d) => {
     buf = buf.slice(i + 4 + len);
     if (msg.method === "workspace/configuration")
       send({ jsonrpc: "2.0", id: msg.id, result: [{ path: EUICC, rules: "", checkOn: "save" }] });
-    if (msg.method === "textDocument/publishDiagnostics") {
+    /* The server has to say it completes, or the editor never asks. */
+    if (msg.id === 1 && msg.result) {
+      if (!msg.result.capabilities.completionProvider) {
+        console.log("FAIL: the server does not declare completion");
+        process.exit(1);
+      }
+      console.log("  completionProvider is declared");
+    }
+
+    if (msg.method === "textDocument/publishDiagnostics" && !asked) {
       const d = msg.params.diagnostics;
       const codes = d.map((x) => x.code);
       for (const x of d)
@@ -43,7 +53,30 @@ srv.stdout.on("data", (d) => {
         console.log(`\nFAIL: expected ${want.join(" and ")}, missing ${missing.join(" ")}`);
         process.exit(1);
       }
-      console.log(`\n${d.length} diagnostics, both ordering rules reported`);
+      console.log(`  ${d.length} diagnostics, both ordering rules reported`);
+
+      /*
+       * Line 2 column 2 is where major-version begins, inside the header. The
+       * suggester has tests of its own; this one asks over the protocol,
+       * because a suggester nothing calls is worth nothing.
+       */
+      asked = true;
+      send({ jsonrpc: "2.0", id: 2, method: "textDocument/completion",
+             params: { textDocument: { uri: "file:///tmp/x.vn" },
+                       position: { line: 2, character: 2 } } });
+    }
+
+    if (msg.id === 2) {
+      const labels = (msg.result || []).map((x) => x.label);
+      const want = ["iccid", "profileType", "eUICC-Mandatory-services"];
+      const missing = want.filter((w) => !labels.includes(w));
+      if (missing.length) {
+        console.log(`\nFAIL: completion missing ${missing.join(", ")}`);
+        console.log(`      got ${labels.join(", ") || "nothing"}`);
+        process.exit(1);
+      }
+      console.log(`  completion offered ${labels.length} members of ProfileHeader`);
+      console.log("\ndiagnostics and completion both answered over LSP");
       process.exit(0);
     }
   }

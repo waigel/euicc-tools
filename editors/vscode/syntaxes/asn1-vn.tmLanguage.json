@@ -26,6 +26,9 @@
       "include": "#tag"
     },
     {
+      "include": "#assignment-head"
+    },
+    {
       "include": "#assign"
     },
     {
@@ -42,6 +45,9 @@
     },
     {
       "include": "#typeref"
+    },
+    {
+      "include": "#fieldname"
     }
   ],
   "repository": {
@@ -73,6 +79,21 @@
       "match": "\\[\\s*(UNIVERSAL|APPLICATION|PRIVATE|CONTEXT)?\\s*\\d*\\s*\\]",
       "name": "entity.other.attribute-name.tag.asn1"
     },
+    "assignment-head": {
+      "comment": "X.680 16.1: valuereference Type ::= Value. The reference is lower case and the type upper case, which is grammar and not convention. Listed before #fieldname, which would otherwise claim the reference: both match at the same offset and the earlier rule wins.",
+      "match": "(?<![-\\w])([a-z][A-Za-z0-9-]*)(\\s+)([A-Z][A-Za-z0-9-]*)(\\s*)(::=)",
+      "captures": {
+        "1": {
+          "name": "variable.other.constant.asn1"
+        },
+        "3": {
+          "name": "entity.name.class.asn1"
+        },
+        "5": {
+          "name": "keyword.operator.assignment.asn1"
+        }
+      }
+    },
     "assign": {
       "match": "::=",
       "name": "keyword.operator.assignment.asn1"
@@ -97,6 +118,11 @@
       "comment": "X.680 12.2: a type reference begins with an upper case letter. The lookbehind matters: a hyphen is a word boundary, so a plain \\b let this match Mandatory-services inside the field name eUICC-Mandatory-services, and the editor coloured half an identifier as a type.",
       "match": "(?<![-\\w])[A-Z][A-Za-z0-9-]*",
       "name": "entity.name.class.asn1"
+    },
+    "fieldname": {
+      "comment": "A member name inside a value, and a CHOICE alternative before its colon. Value notation is an object literal from top to bottom, so these carry the scope a theme colours an object literal key with: TypeScript gives meta.object-literal.key and the default dark theme paints it #9CDCFE. Without this rule almost every line of a profile is white, because almost every word in one is a member name. A name that is itself the value, an ENUMERATED identifier, is followed by a comma or a closing brace, so the lookahead leaves it plain, the way an identifier used as a value stays plain in TypeScript.",
+      "match": "(?<![-\\w])[a-z][A-Za-z0-9-]*(?=\\s*:[^:=]|\\s+[^,}\\s])",
+      "name": "meta.object-literal.key.asn1"
     }
   }
 }

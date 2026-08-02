@@ -9,11 +9,30 @@ Interoperable Format*, version 3.4.1, which the industry calls SAIP.
 ## What it does
 
 - Highlights `.vn` and `.asn1vn` files.
+- Offers the members allowed at the cursor, with their types.
 - Reports the errors that `euicc check` reports, in the editor.
 
 A profile package fails in two ways. The ASN.1 module states what a value may
 hold: a type, a size, a range. The specification states in prose what a package
 must look like: one header, and it comes first. Both appear as diagnostics.
+
+## Completion
+
+The list comes from the schema, which `euicc schema` reads out of asn1c's own
+type descriptors. What is offered depends on where the cursor is:
+
+| Where | What is offered |
+| --- | --- |
+| After `::=` | The alternatives of `ProfileElement`, written `name : ` |
+| Inside a SEQUENCE | Its members, mandatory ones first, written `name ` |
+| Inside a CHOICE | Its alternatives, written `name : ` |
+| Inside a list | One element, wrapped in its own braces |
+| After a member name | The identifiers that member accepts, where it has any |
+
+A member already written is not offered again. `milenage` and the other named
+numbers are there because `euicc` carries a table of the identifiers asn1c
+parses and does not keep. The same table lets you write the name instead of the
+number, and `euicc show` prints it back.
 
 ## What it needs
 
@@ -43,6 +62,14 @@ The extension parses no ASN.1 and evaluates no rule. Every diagnostic comes from
 A parse error is marked where it is. A rule failure is marked on the first line
 of the profile element it belongs to, because a rule names an element and not a
 position in a file.
+
+Completion finds the type at the cursor by following the member names through
+the open braces. It checks nothing: a suggestion in the wrong place is a wrong
+suggestion, and what is wrong in the file is what `euicc check` says. This is
+where it differs from TypeScript, whose server type-checks the file as you
+type. Value notation needs no such machinery, because it has no inference, no
+imports and no generics. The type at a point follows from the path of member
+names and from nothing else.
 
 ## Licence
 

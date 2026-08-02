@@ -1,10 +1,16 @@
 /*
  * A language server for ASN.1 value notation.
  *
- * It runs `euicc check --json` and turns what comes back into diagnostics.
- * Nothing here parses ASN.1 or evaluates a rule. A second implementation of
- * either would be a second thing that can disagree with the first, and the
- * editor would then report something the build does not.
+ * It runs `euicc check --json` and turns what comes back into diagnostics, and
+ * `euicc schema` once for what may be written where the cursor is. Nothing
+ * here parses ASN.1 or evaluates a rule. A second implementation of either
+ * would be a second thing that can disagree with the first, and the editor
+ * would then report something the build does not.
+ *
+ * The same arrangement VS Code uses for TypeScript: the grammar colours the
+ * text and the server answers everything that needs to know the schema. The
+ * TypeScript extension contributes no completion in its package.json either;
+ * it registers providers at run time against tsserver.
  *
  * The server speaks LSP, so it is not only for VS Code. Neovim and Helix start
  * it the same way.
@@ -17,16 +23,22 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  CompletionItem,
+  CompletionItemKind,
   createConnection,
   Diagnostic,
   DiagnosticSeverity,
   DidChangeConfigurationNotification,
   InitializeParams,
+  InsertTextFormat,
+  MarkupKind,
   ProposedFeatures,
   TextDocuments,
   TextDocumentSyncKind,
 } from "vscode-languageserver/node";
 import { TextDocument } from "vscode-languageserver-textdocument";
+
+import { analyze, Schema, suggest } from "./schema";
 
 interface Finding {
   severity: "error" | "warning";
@@ -58,6 +70,15 @@ let settings: Settings = DEFAULTS;
 connection.onInitialize((_params: InitializeParams) => ({
   capabilities: {
     textDocumentSync: TextDocumentSyncKind.Incremental,
+    completionProvider: {
+      /*
+       * A brace or a comma opens a place where a member name goes, and a
+       * colon the place after a CHOICE alternative. Typing a letter triggers
+       * the editor's own word completion, which is what asks here as well.
+       */
+      triggerCharacters: ["{", ",", ":"],
+      resolveProvider: false,
+    },
   },
 }));
 
@@ -79,6 +100,8 @@ connection.onInitialized(() => {
 connection.onDidChangeConfiguration(async () => {
   settingsReady = loadSettings();
   await settingsReady;
+  /* The path to euicc may have changed, and with it the schema. */
+  schemaOnce = undefined;
   for (const d of documents.all()) void check(d);
 });
 
@@ -165,6 +188,64 @@ async function check(doc: TextDocument): Promise<void> {
 
   connection.sendDiagnostics({ uri: doc.uri, diagnostics });
 }
+
+/* ---- completion ----------------------------------------------------------- */
+
+/*
+ * The schema does not change while the editor is open, so it is read once.
+ * A failure is remembered too: without that, every keystroke would start
+ * another euicc that is not there.
+ */
+let schemaOnce: Promise<Schema | null> | undefined;
+
+function loadSchema(): Promise<Schema | null> {
+  if (schemaOnce) return schemaOnce;
+  schemaOnce = new Promise((resolve) => {
+    execFile(settings.path, ["schema"], { timeout: 20000, maxBuffer: 8 << 20 },
+      (err, stdout) => {
+        if (err || !stdout.trim()) {
+          connection.console.warn(
+            `euicc: no schema for completion (${err?.message ?? "no output"})`
+          );
+          resolve(null);
+          return;
+        }
+        try {
+          resolve(JSON.parse(stdout) as Schema);
+        } catch {
+          connection.console.warn("euicc: the schema was not JSON");
+          resolve(null);
+        }
+      });
+  });
+  return schemaOnce;
+}
+
+connection.onCompletion(async (params): Promise<CompletionItem[]> => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc || doc.languageId !== "asn1-vn") return [];
+  if (settingsReady) await settingsReady;
+
+  const schema = await loadSchema();
+  if (!schema) return [];
+
+  const text = doc.getText();
+  const ctx = analyze(schema, text, doc.offsetAt(params.position));
+
+  return suggest(schema, ctx).map((s) => ({
+    label: s.label,
+    kind: s.value ? CompletionItemKind.EnumMember : CompletionItemKind.Field,
+    detail: s.detail,
+    documentation: s.doc
+      ? { kind: MarkupKind.Markdown, value: s.doc }
+      : undefined,
+    insertText: s.insert,
+    insertTextFormat: s.snippet
+      ? InsertTextFormat.Snippet
+      : InsertTextFormat.PlainText,
+    sortText: s.sort,
+  }));
+});
 
 documents.onDidSave((e) => void check(e.document));
 documents.onDidOpen((e) => void check(e.document));
