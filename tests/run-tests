@@ -1,0 +1,50 @@
+#!/bin/sh
+# Every command, against a profile that must pass and one that must fail.
+set -u
+here=$(dirname "$0"); root=$(cd "$here/.." && pwd)
+E="$root/euicc"
+pass=0; fail=0
+ok()   { printf 'ok   %s\n' "$1"; pass=$((pass+1)); }
+bad()  { printf 'FAIL %s\n' "$1"; fail=$((fail+1)); }
+
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+
+cat > "$tmp/good.vn" <<'VN'
+value1 ProfileElement ::= header : {
+    major-version 2, minor-version 3,
+    iccid '89000123456789012341'H,
+    eUICC-Mandatory-services { usim NULL },
+    eUICC-Mandatory-GFSTEList { { 2 23 143 1 2 1 } }
+}
+value2 ProfileElement ::= end : { end-header { mandated NULL, identification 99 } }
+VN
+
+"$E" build "$tmp/good.vn" -o "$tmp/good.der" 2>/dev/null && ok "build writes DER" || bad "build writes DER"
+test -s "$tmp/good.der" && ok "the DER is not empty" || bad "the DER is not empty"
+"$E" check "$tmp/good.der" >/dev/null 2>&1 && ok "a correct package passes" || bad "a correct package passes"
+"$E" show "$tmp/good.der" 2>/dev/null | grep -q "major-version 2" \
+  && ok "show writes value notation" || bad "show writes value notation"
+
+# The header last: two ordering rules must catch it. Split on the second
+# assignment rather than on a line number, which a reformat would invalidate.
+awk '/^value2 /{p=1} p{e=e $0 "\n"; next} {h=h $0 "\n"}
+     END{printf "%s%s", e, h}' "$tmp/good.vn" > "$tmp/bad.vn"
+out=$("$E" check "$tmp/bad.vn" 2>&1)
+echo "$out" | grep -q SAIP-HDR-02 && ok "the header must come first" || bad "the header must come first"
+echo "$out" | grep -q SAIP-END-02 && ok "PE-End must come last"      || bad "PE-End must come last"
+"$E" check "$tmp/bad.vn" >/dev/null 2>&1 && bad "a bad package exits non-zero" \
+                                         || ok "a bad package exits non-zero"
+
+# A size the schema forbids is caught before anything is written.
+sed "s/'89000123456789012341'H/'8900'H/" "$tmp/good.vn" > "$tmp/short.vn"
+"$E" build "$tmp/short.vn" -o "$tmp/short.der" 2>&1 | grep -q "constraint failed" \
+  && ok "a short ICCID is refused" || bad "a short ICCID is refused"
+
+# Every published profile must stay clean.
+for d in "$root"/vendor/euicc-profile-tool/testdata/*.der; do
+  [ -f "$d" ] || continue
+  "$E" check "$d" >/dev/null 2>&1 && ok "clean: $(basename "$d")" || bad "clean: $(basename "$d")"
+done
+
+printf '\n%d ok, %d failed\n' "$pass" "$fail"
+[ "$fail" -eq 0 ]
