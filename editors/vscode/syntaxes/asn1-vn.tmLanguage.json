@@ -47,6 +47,9 @@
       "include": "#typeref"
     },
     {
+      "include": "#alternative"
+    },
+    {
       "include": "#fieldname"
     }
   ],
@@ -80,12 +83,9 @@
       "name": "entity.other.attribute-name.tag.asn1"
     },
     "assignment-head": {
-      "comment": "X.680 16.1: valuereference Type ::= Value. The reference is lower case and the type upper case, which is grammar and not convention. Listed before #fieldname, which would otherwise claim the reference: both match at the same offset and the earlier rule wins.",
+      "comment": "X.680 16.1: valuereference Type ::= Value. The reference is lower case and the type upper case, which is grammar and not convention. It is left uncoloured on purpose: it is module syntax around the value and not part of it, and euicc steps over it when reading. Listed before #alternative and #fieldname, which would otherwise claim the reference, since all three match at the same offset and the earlier rule wins.",
       "match": "(?<![-\\w])([a-z][A-Za-z0-9-]*)(\\s+)([A-Z][A-Za-z0-9-]*)(\\s*)(::=)",
       "captures": {
-        "1": {
-          "name": "variable.other.constant.asn1"
-        },
         "3": {
           "name": "entity.name.class.asn1"
         },
@@ -119,9 +119,14 @@
       "match": "(?<![-\\w])[A-Z][A-Za-z0-9-]*",
       "name": "entity.name.class.asn1"
     },
+    "alternative": {
+      "comment": "X.680 29.2: an alternative of a CHOICE is written `name : value`. It selects one of a fixed set rather than naming a slot every value has, which is what an enum member is, so it takes that scope and the brighter blue #4FC1FF that themes give one. The colon is what tells the two apart, and it is the same distinction euicc has to make when reading.",
+      "match": "(?<![-\\w])[a-z][A-Za-z0-9-]*(?=\\s*:[^:=])",
+      "name": "variable.other.enummember.asn1"
+    },
     "fieldname": {
-      "comment": "A member name inside a value, and a CHOICE alternative before its colon. Value notation is an object literal from top to bottom, so these carry the scope a theme colours an object literal key with: TypeScript gives meta.object-literal.key and the default dark theme paints it #9CDCFE. Without this rule almost every line of a profile is white, because almost every word in one is a member name. A name that is itself the value, an ENUMERATED identifier, is followed by a comma or a closing brace, so the lookahead leaves it plain, the way an identifier used as a value stays plain in TypeScript.",
-      "match": "(?<![-\\w])[a-z][A-Za-z0-9-]*(?=\\s*:[^:=]|\\s+[^,}\\s])",
+      "comment": "A member name inside a value. Value notation is an object literal from top to bottom, so these carry the scope a theme colours an object literal key with: TypeScript gives meta.object-literal.key and the default dark theme paints it #9CDCFE. Without this rule almost every line of a profile is white, because almost every word in one is a member name. A name that is itself the value, an ENUMERATED identifier, is followed by a comma or a closing brace, so the lookahead leaves it plain, the way an identifier used as a value stays plain in TypeScript.",
+      "match": "(?<![-\\w])[a-z][A-Za-z0-9-]*(?=\\s+[^,}\\s])",
       "name": "meta.object-literal.key.asn1"
     }
   }

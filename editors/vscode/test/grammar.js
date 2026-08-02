@@ -37,16 +37,23 @@ const SAMPLE = [
  * taken for.
  */
 const KEY = "meta.object-literal.key";
+const ALT = "variable.other.enummember";
 
 const EXPECT = [
   ["ProfileElement", "entity.name.class"],
   ["::=", "keyword.operator.assignment"],
-  ["value1", "variable.other.constant"],
-  /* Every member name, and a CHOICE alternative before its colon. These are
-     object literal keys and a theme colours them; leaving them plain left a
-     profile almost entirely white, because almost every word in one is a
-     member name. */
-  ["header", KEY],
+  /* `valueN Type ::=` is module syntax around the value and not part of it;
+     euicc steps over it when reading. Colouring the reference put a second
+     blue next to the alternative on the same line, near enough to it to be
+     indistinguishable. */
+  ["value1", null],
+  /* A CHOICE alternative selects one of a fixed set, which is what an enum
+     member is, and it is not the same thing as a member name. The colon is
+     what separates the two, here and in the reader. */
+  ["header", ALT],
+  /* Every member name. These are object literal keys and a theme colours
+     them; leaving them plain left a profile almost entirely white, because
+     almost every word in one is a member name. */
   ["major-version", KEY],
   ["profileType", KEY],
   ["usim", KEY],
@@ -122,6 +129,94 @@ function scopeAt(lines, text) {
     console.log(`${pass ? "ok  " : "FAIL"} ${text.padEnd(26)} ${got || "(unstyled)"}`);
     pass ? ok++ : failed++;
   }
+
+  /*
+   * A scope is not a colour. Two scopes that a theme resolves to the same
+   * value look the same on screen, whatever the rules say, and that is the
+   * failure a reader actually sees: with the assignment reference coloured,
+   * `value1` and the alternative `header` sat next to each other in two blues
+   * nobody could tell apart.
+   *
+   * Resolved against the editor's own default theme, so this needs VS Code
+   * installed and says so rather than passing quietly when it is not.
+   */
+  const c = themeColours();
+  if (!c) {
+    console.log("\nskip  no VS Code here, so the colours were not resolved");
+  } else {
+    /*
+     * Third column is the family. Two things of one family may share a
+     * colour: a type reference and a builtin are both types, and VS Code's
+     * own theme paints `string` and a class name alike for that reason. Two
+     * families sharing one is the failure.
+     */
+    const kinds = [
+      ["a type", "ProfileElement", "type"],
+      ["a builtin", "NULL", "type"],
+      /* The reference is module syntax and stays plain. Listed so that
+         colouring it again fails here too: variable.other.constant and
+         variable.other.enummember are the same #4FC1FF, and the two words
+         sit next to each other on the assignment line. */
+      ["the reference", "value1", "syntax"],
+      ["an alternative", "header", "alternative"],
+      ["a member", "profileType", "member"],
+      ["a number", "2", "literal"],
+      ["a string", `"GSMA Test Profile"`, "literal"],
+      ["a hex string", `'89000123456789012341'H`, "literal"],
+      ["a comment", "-- a comment", "comment"],
+    ];
+    const seen = new Map();
+    for (const [what, text, family] of kinds) {
+      const col = c(scopeAt(lines, text).split(","));
+      if (!seen.has(col)) seen.set(col, []);
+      seen.get(col).push({ what, text, family });
+    }
+    for (const [col, group] of seen) {
+      const families = new Set(group.map((g) => g.family));
+      const clash = families.size > 1;
+      const names = group.map((g) => `${g.what} (${g.text})`).join(" and ");
+      console.log(`${clash ? "FAIL" : "ok  "} ${col} ${names}`);
+      clash ? failed++ : ok++;
+    }
+  }
+
   console.log(`\n${ok} ok, ${failed} failed`);
   process.exit(failed ? 1 : 0);
 })();
+
+/*
+ * The default dark theme, as a function from a token's scopes to a colour.
+ * dark_modern includes dark_plus includes dark_vs, so the files are read
+ * innermost first and a later rule of the same length wins -- getting that
+ * tie-break backwards reported enum members as the colour of a number.
+ */
+function themeColours() {
+  const dir =
+    "/Applications/Visual Studio Code.app/Contents/Resources/app/" +
+    "extensions/theme-defaults/themes/";
+  if (!fs.existsSync(dir + "dark_modern.json")) return null;
+
+  const rules = [];
+  (function load(name) {
+    const d = JSON.parse(fs.readFileSync(dir + name, "utf8"));
+    if (d.include) load(d.include.replace("./", ""));
+    for (const r of d.tokenColors ?? []) {
+      const scopes =
+        typeof r.scope === "string" ? r.scope.split(/[,\s]+/) : r.scope ?? [];
+      for (const s of scopes) if (s && r.settings.foreground)
+        rules.push({ scope: s, fg: r.settings.foreground.toUpperCase() });
+    }
+  })("dark_modern.json");
+
+  return (scopes) => {
+    for (const sc of [...scopes].reverse()) {
+      let best = null;
+      let len = -1;
+      for (const r of rules)
+        if (sc === r.scope || sc.startsWith(r.scope + "."))
+          if (r.scope.length >= len) { best = r.fg; len = r.scope.length; }
+      if (best) return best;
+    }
+    return "#D4D4D4";
+  };
+}
