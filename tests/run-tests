@@ -58,5 +58,94 @@ sed 's/minor-version 3/minor-version 4/' "$tmp/good.vn" > "$tmp/v4.vn"
 "$E" diff "$tmp/bad.vn" "$tmp/good.der" 2>/dev/null | grep -q "different order" \
   && ok "a reordering is reported" || bad "a reordering is reported"
 
+# Named numbers and named bits. asn1c parses these identifiers and keeps
+# none of them, so vn-annotate recovers them into a table. The table was
+# linked but never handed to the reader or the writer, and for as long as
+# that was so, euicc rejected the form the specification itself prints.
+cat > "$tmp/named.vn" <<'VN'
+value1 ProfileElement ::= akaParameter : {
+    aka-header { mandated NULL, identification 1 },
+    algoConfiguration algoParameter : {
+        algorithmID milenage,
+        algorithmOptions '00'H,
+        key '000102030405060708090A0B0C0D0E0F'H,
+        opc '000102030405060708090A0B0C0D0E0F'H
+    }
+}
+VN
+sed 's/algorithmID milenage/algorithmID 1/' "$tmp/named.vn" > "$tmp/numeric.vn"
+"$E" build "$tmp/named.vn" -o "$tmp/named.der" 2>/dev/null \
+  && ok "a named number is read" || bad "a named number is read"
+"$E" build "$tmp/numeric.vn" -o "$tmp/numeric.der" 2>/dev/null
+cmp -s "$tmp/named.der" "$tmp/numeric.der" \
+  && ok "the name and the number encode alike" || bad "the name and the number encode alike"
+"$E" show "$tmp/named.der" 2>/dev/null | grep -q "algorithmID milenage" \
+  && ok "show writes the name, not the number" || bad "show writes the name, not the number"
+
+# A rejected build must say why. It exited 1 in silence until it did, which
+# reads as a broken tool rather than as a wrong file.
+sed 's/algorithmID milenage/algorithmID nonsense/' "$tmp/named.vn" > "$tmp/unknown.vn"
+"$E" build "$tmp/unknown.vn" -o /dev/null 2>&1 | grep -q "line 4" \
+  && ok "a rejected build names the line" || bad "a rejected build names the line"
+"$E" show "$tmp/unknown.vn" 2>&1 | grep -q "nonsense" \
+  && ok "a rejected show says what it choked on" || bad "a rejected show says what it choked on"
+
+# schema: what an editor completes against. Checked against the ASN.1 source
+# and not against itself, so a walk that quietly loses a branch is visible.
+# Line-oriented on purpose: the dump puts one type and one member on a line
+# each, which sed reads, so the test suite of a C program needs no interpreter.
+"$E" schema > "$tmp/schema.json" 2>/dev/null
+
+# The block of one type, from its opening line to the ]} that closes it.
+blk() { sed -n "/^  \"$1\":/,/^  ]}/p" "$tmp/schema.json"; }
+
+# Every member name in what is piped in. grep -o rather than a sed capture:
+# `.*"name": "\(...\)"` is greedy, so two members on one line yield only the
+# second, and an extra one goes unseen. The dump writes one per line today and
+# this does not depend on it.
+names() { grep -o '"name": "[^"]*"' | sed 's/^"name": "//; s/"$//'; }
+
+grep -q '"root": "ProfileElement"' "$tmp/schema.json" \
+  && ok "schema: the root is ProfileElement" || bad "schema: the root is ProfileElement"
+grep -q '"ProfileElement": {"kind": "CHOICE"' "$tmp/schema.json" \
+  && ok "schema: ProfileElement is a CHOICE" || bad "schema: ProfileElement is a CHOICE"
+
+# Every alternative of the source CHOICE, one for one. A missing branch is the
+# failure that matters here and it is invisible in a dump read on its own.
+sed -n '/^ProfileElement[[:space:]]*::=/,/^}/p' \
+    "$root/vendor/euicc-profile-tool/profile-3.4.1.asn" \
+  | sed -n 's/^[[:space:]]*\([a-z][A-Za-z0-9-]*\)[[:space:]][[:space:]]*[A-Za-z].*/\1/p' \
+  | sort -u > "$tmp/want"
+blk ProfileElement | names | sort -u > "$tmp/have"
+if cmp -s "$tmp/want" "$tmp/have"; then
+  ok "schema: every alternative of ProfileElement is present"
+else
+  bad "schema: every alternative of ProfileElement is present"
+  comm -3 "$tmp/want" "$tmp/have" | sed 's/^/       /'
+fi
+
+# File ::= SEQUENCE OF CHOICE. The inline CHOICE is a level in the written
+# value, so it must survive as a type of its own.
+grep -q '"File": {"kind": "SEQUENCE OF", "of": "File__Member"}' "$tmp/schema.json" \
+  && ok "schema: File is a SEQUENCE OF" || bad "schema: File is a SEQUENCE OF"
+inner=$(blk File__Member | names | sort | tr '\n' ' ')
+[ "$inner" = "doNotCreate fileDescriptor fillFileContent fillFileOffset " ] \
+  && ok "schema: the inline CHOICE inside File is kept" \
+  || bad "schema: the inline CHOICE inside File is kept ($inner)"
+
+# OPTIONAL has to be right: the client offers a mandatory member first, and
+# the reader rejects the value when one is left out.
+blk ProfileHeader | grep -q '"name": "iccid", .*"optional": false' \
+  && blk ProfileHeader | grep -q '"name": "profileType", .*"optional": true' \
+  && ok "schema: OPTIONAL is carried through" || bad "schema: OPTIONAL is carried through"
+
+# The identifiers only the annotation table knows.
+blk AlgoParameter \
+  | grep -q '"name": "algorithmID", .*"names": \["milenage", "tuak", "usim-test-algorithm"\]' \
+  && ok "schema: named numbers reach the member" || bad "schema: named numbers reach the member"
+
+sc=$("$E" schema 2>/dev/null | wc -c)
+[ "$sc" -gt 10000 ] && ok "schema: the dump is not a stub" || bad "schema: the dump is not a stub"
+
 printf '\n%d ok, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

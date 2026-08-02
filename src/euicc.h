@@ -63,4 +63,12 @@ struct ProfileElement;
 int diff_report(struct ProfileElement **want, int want_n, xmlDocPtr want_xml,
                 struct ProfileElement **have, int have_n, xmlDocPtr have_xml);
 
+/* ---- schema -------------------------------------------------------------- */
+
+/*
+ * The schema as JSON, read from asn1c's descriptors, for an editor that has to
+ * offer the members allowed at a point in a file.
+ */
+int cmd_schema(FILE *f);
+
 #endif /* EUICC_H */

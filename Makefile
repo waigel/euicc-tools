@@ -51,7 +51,7 @@ endif
 
 ALL_CFLAGS = $(STD) $(WARN) $(CFLAGS) $(EXTRA) $(INC) $(DEF)
 
-OWN_SRCS := src/main.c src/schematron.c src/diff.c
+OWN_SRCS := src/main.c src/schematron.c src/diff.c src/schema.c
 VN_SRCS  := $(wildcard $(VN)/src/*.c)
 GEN_SRCS  = $(filter-out $(DIST)/converter-example.c, $(wildcard $(DIST)/*.c))
 
