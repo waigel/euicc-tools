@@ -1,7 +1,7 @@
 {
   "name": "euicc-vn",
   "displayName": "eUICC profile packages",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Write eUICC profile packages in ASN.1 value notation, with the rules checked as you save.",
   "publisher": "waigel",
   "license": "MIT",
@@ -57,8 +57,14 @@
             "save",
             "type"
           ],
-          "default": "save",
-          "description": "When to check. Checking on every keystroke runs euicc on text that is still being written."
+          "default": "type",
+          "description": "When to check. Checking as you type waits for a pause first, so a run costs one process and not one per keystroke."
+        },
+        "euicc.checkDelay": {
+          "type": "number",
+          "default": 300,
+          "minimum": 0,
+          "description": "Milliseconds of quiet before checking as you type. A check of a 3000 line profile takes about 150 ms."
         }
       }
     }

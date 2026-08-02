@@ -59,9 +59,15 @@ interface Settings {
   path: string;
   rules: string;
   checkOn: "save" | "type";
+  checkDelay: number;
 }
 
-const DEFAULTS: Settings = { path: "euicc", rules: "", checkOn: "save" };
+const DEFAULTS: Settings = {
+  path: "euicc",
+  rules: "",
+  checkOn: "type",
+  checkDelay: 300,
+};
 
 const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);
@@ -247,14 +253,38 @@ connection.onCompletion(async (params): Promise<CompletionItem[]> => {
   }));
 });
 
+/*
+ * Checking as you type means checking a file that is halfway through a word,
+ * and euicc is a process, not a library call. A check of a 3000 line profile
+ * takes about 150 ms, so one per keystroke is waste; one per pause is not.
+ * The timer is per document, and a later edit replaces the pending run rather
+ * than adding a second.
+ */
+const pending = new Map<string, NodeJS.Timeout>();
+
+function checkSoon(doc: TextDocument): void {
+  const t = pending.get(doc.uri);
+  if (t) clearTimeout(t);
+  pending.set(
+    doc.uri,
+    setTimeout(() => {
+      pending.delete(doc.uri);
+      void check(doc);
+    }, Math.max(0, settings.checkDelay))
+  );
+}
+
 documents.onDidSave((e) => void check(e.document));
 documents.onDidOpen((e) => void check(e.document));
 documents.onDidChangeContent((e) => {
-  if (settings.checkOn === "type") void check(e.document);
+  if (settings.checkOn === "type") checkSoon(e.document);
 });
-documents.onDidClose((e) =>
-  connection.sendDiagnostics({ uri: e.document.uri, diagnostics: [] })
-);
+documents.onDidClose((e) => {
+  const t = pending.get(e.document.uri);
+  if (t) clearTimeout(t);
+  pending.delete(e.document.uri);
+  connection.sendDiagnostics({ uri: e.document.uri, diagnostics: [] });
+});
 
 documents.listen(connection);
 connection.listen();

@@ -104,6 +104,41 @@ line_at(const unsigned char *buf, size_t off) {
     return line;
 }
 
+/* The 1-based column, counted from the last newline before the offset. */
+static int
+column_at(const unsigned char *buf, size_t off) {
+    size_t start = off;
+    while(start > 0 && buf[start - 1] != '\n') start--;
+    return (int)(off - start) + 1;
+}
+
+/*
+ * The reader is handed one value at a time, so it counts from the start of
+ * that value and says "line 1" for the first line of the third element in a
+ * file. Its position is right and its origin is not the file's, which is what
+ * an editor needs. Rewritten here rather than in one command, so that build,
+ * show, check and diff all say the same thing.
+ *
+ * A position on the value's first line also has to move sideways, because the
+ * value begins after `valueN ProfileElement ::= ` and not in column one.
+ */
+static void
+absolute_position(char *msg, size_t msgsz, const unsigned char *buf, size_t off) {
+    int line = 0, column = 0, consumed = 0;
+
+    if(sscanf(msg, "line %d column %d: %n", &line, &column, &consumed) != 2
+       || consumed <= 0)
+        return;
+
+    int base_line = line_at(buf, off);
+    int abs_line = base_line + line - 1;
+    int abs_column = (line == 1) ? column_at(buf, off) + column - 1 : column;
+
+    char rest[512];
+    snprintf(rest, sizeof rest, "%s", msg + consumed);
+    snprintf(msg, msgsz, "line %d column %d: %s", abs_line, abs_column, rest);
+}
+
 /*
  * Every ProfileElement in the input, decoded. Returns the count, or -1.
  *
@@ -147,6 +182,7 @@ read_package(const unsigned char *buf, size_t len, int as_text,
             if(rv.code != RC_OK) {
                 snprintf(g_parse_error, sizeof g_parse_error, "%s",
                          reason[0] ? reason : "not value notation");
+                absolute_position(g_parse_error, sizeof g_parse_error, buf, off);
                 g_parse_element = n + 1;
                 return -1;
             }

@@ -22,6 +22,17 @@ const send = (msg) => {
 
 let buf = Buffer.alloc(0);
 let asked = false;
+let edited = false;
+
+/* The same document, with a hex string where the second element wants an
+   identifier. Line 9 is the one it is on. */
+const BAD =
+  "value1 ProfileElement ::= header : {\n  major-version 2, minor-version 3,\n"
++ "  iccid '89000123456789012341'H,\n  eUICC-Mandatory-services { usim NULL },\n"
++ "  eUICC-Mandatory-GFSTEList { { 2 23 143 1 2 1 } }\n}\n"
++ "value2 ProfileElement ::= mf : {\n"
++ "  mf-header { mandated NULL, identification 1 },\n"
++ "  templateID '2F0601'H\n}\n";
 srv.stdout.on("data", (d) => {
   buf = Buffer.concat([buf, d]);
   for (;;) {
@@ -32,7 +43,8 @@ srv.stdout.on("data", (d) => {
     const msg = JSON.parse(buf.slice(i + 4, i + 4 + len).toString());
     buf = buf.slice(i + 4 + len);
     if (msg.method === "workspace/configuration")
-      send({ jsonrpc: "2.0", id: msg.id, result: [{ path: EUICC, rules: "", checkOn: "save" }] });
+      send({ jsonrpc: "2.0", id: msg.id,
+             result: [{ path: EUICC, rules: "", checkOn: "type", checkDelay: 50 }] });
     /* The server has to say it completes, or the editor never asks. */
     if (msg.id === 1 && msg.result) {
       if (!msg.result.capabilities.completionProvider) {
@@ -76,7 +88,34 @@ srv.stdout.on("data", (d) => {
         process.exit(1);
       }
       console.log(`  completion offered ${labels.length} members of ProfileHeader`);
-      console.log("\ndiagnostics and completion both answered over LSP");
+
+      /*
+       * An edit and no save. Checking as you type is the default, so a value
+       * of the wrong type has to arrive without one, and on its own line: the
+       * reader counts from the start of the value it was handed, and every
+       * failure in the second element used to be reported on line 1.
+       */
+      edited = true;
+      send({ jsonrpc: "2.0", method: "textDocument/didChange", params: {
+        textDocument: { uri: "file:///tmp/x.vn", version: 2 },
+        contentChanges: [{ text: BAD }] } });
+    }
+
+    if (msg.method === "textDocument/publishDiagnostics" && edited) {
+      const d = msg.params.diagnostics;
+      if (!d.length) return;
+      const at = d[0].range.start;
+      console.log(`  after an edit and no save: line ${at.line + 1} ` +
+                  `column ${at.character + 1}  ${d[0].message}`);
+      if (!/wrong|string|expected/i.test(d[0].message)) {
+        console.log("FAIL: the wrong type was not reported");
+        process.exit(1);
+      }
+      if (at.line + 1 !== 9) {
+        console.log("FAIL: expected it on line 9, the line it is on");
+        process.exit(1);
+      }
+      console.log("\ndiagnostics, completion and checking as you type all answered");
       process.exit(0);
     }
   }

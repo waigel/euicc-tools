@@ -52,16 +52,21 @@ If `euicc` is somewhere else, set `euicc.path`.
 | --- | --- |
 | `euicc.path` | The command. A path, or a name on PATH. |
 | `euicc.rules` | The rule set. Empty uses the one compiled into `euicc`. |
-| `euicc.checkOn` | `save`, or `type` to check on every keystroke. |
+| `euicc.checkOn` | `type` to check as you write, `save` to wait for a save. |
+| `euicc.checkDelay` | Milliseconds of quiet before a check while typing. |
 
 ## What it does not do
 
 The extension parses no ASN.1 and evaluates no rule. Every diagnostic comes from
 `euicc`, so the editor cannot report something that the build does not.
 
-A parse error is marked where it is. A rule failure is marked on the first line
-of the profile element it belongs to, because a rule names an element and not a
-position in a file.
+A parse error is marked where it is, including one the schema catches: a hex
+string where the type wants text is a parse error and appears as you write it.
+A value that lacks a mandatory member is marked on the brace of that value,
+because there is no other token to point at and the object is what is wrong.
+
+A rule failure is marked on the first line of the profile element it belongs
+to, because a rule names an element and not a position in a file.
 
 Completion finds the type at the cursor by following the member names through
 the open braces. It checks nothing: a suggestion in the wrong place is a wrong

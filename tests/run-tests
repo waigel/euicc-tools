@@ -147,5 +147,44 @@ blk AlgoParameter \
 sc=$("$E" schema 2>/dev/null | wc -c)
 [ "$sc" -gt 10000 ] && ok "schema: the dump is not a stub" || bad "schema: the dump is not a stub"
 
+# Where a parse failure is reported. The reader is handed one value at a time
+# and counts from the start of it, so every failure in the second element used
+# to arrive as line 1 and an editor marked the top of the file.
+cat > "$tmp/pos.vn" <<'VN'
+value1 ProfileElement ::= header : {
+    major-version 2, minor-version 3,
+    iccid '89000123456789012341'H,
+    eUICC-Mandatory-services { usim NULL },
+    eUICC-Mandatory-GFSTEList { { 2 23 143 1 2 1 } }
+}
+value2 ProfileElement ::= mf : {
+    mf-header { mandated NULL, identification 1 },
+    templateID { 2 23 143 1 2 1 },
+    mf { fileDescriptor : { securityAttributesReferenced 42 } }
+}
+VN
+out=$("$E" check -t --json "$tmp/pos.vn" 2>&1)
+echo "$out" | grep -q '"line": 10' \
+  && ok "a failure inside the second element names its own line" \
+  || bad "a failure inside the second element names its own line ($out)"
+
+# A missing member has no token to point at, so the reader points at the brace
+# of the value that lacks it. That is the object, which is where an editor
+# should mark it.
+sed '10d' "$tmp/pos.vn" | sed 's/    templateID { 2 23 143 1 2 1 },/    templateID { 2 23 143 1 2 1 }/' > "$tmp/nomf.vn"
+out=$("$E" check -t --json "$tmp/nomf.vn" 2>&1)
+echo "$out" | grep -q "missing mandatory member" \
+  && ok "a missing member is reported" || bad "a missing member is reported ($out)"
+echo "$out" | grep -q '"line": 7, "column": 31' \
+  && ok "a missing member is marked on the brace of its object" \
+  || bad "a missing member is marked on the brace of its object ($out)"
+
+# A type the schema does not allow, which is a parse failure and not a rule.
+sed 's|iccid|profileType|' "$tmp/pos.vn" > "$tmp/wrongtype.vn"
+out=$("$E" check -t --json "$tmp/wrongtype.vn" 2>&1)
+echo "$out" | grep -q '"line": 3' \
+  && ok "a value of the wrong type names its line" \
+  || bad "a value of the wrong type names its line ($out)"
+
 printf '\n%d ok, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
