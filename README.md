@@ -7,6 +7,7 @@ Python, no separate codec, and no schema on the side.
 euicc build profile.vn -o profile.der   # value notation in, DER out
 euicc show  profile.der                 # DER in, value notation out
 euicc check profile.der                 # a verdict
+euicc diff  profile.vn vendor.der       # what separates the two
 ```
 
 ## Why one binary
@@ -71,6 +72,35 @@ make check
 
 The rules are not copied here. They stay where they are written and are read
 from the submodule, so a correction there needs no change in this repository.
+
+## diff, and the plan that was not
+
+`euicc diff` compares a source file against a package. It writes nothing and
+judges nothing.
+
+```
+$ euicc diff profile.vn vendor.der
+profile.vn against vendor.der:
+
+  ~ header  (34 -> 36 bytes)
+  + rfm, identification 29  (58 bytes)
+
+0 added, 1 changed, 0 removed, 1 unchanged
+```
+
+The order of the elements is reported on its own, because half the rule set is
+about what comes before what, and a hexdump does not show it.
+
+This started as `euicc plan`, on the model of Terraform, and the analogy did not
+hold. Terraform needs a plan because apply changes live infrastructure, because
+the current state is invisible until you ask, and because one line of
+configuration can destroy a database. Here `build` writes a local file, `show`
+prints what a package holds, and the value notation is the profile. `git diff`
+covers the rest.
+
+One case it does not cover: text on one side, bytes on the other. A package from
+a vendor, or from an earlier release, against the source that should produce it.
+That is what is left, and `diff` is its name.
 
 ## In an editor
 

@@ -53,4 +53,14 @@ void sch_close(sch_engine_t *e);
 int sch_validate(sch_engine_t *e, xmlDocPtr package, sch_result_t *res);
 void sch_result_free(sch_result_t *res);
 
+/* ---- diff ---------------------------------------------------------------- */
+
+/*
+ * What separates two packages. Prints the difference and returns how many
+ * elements differ, or -1 on a failure.
+ */
+struct ProfileElement;
+int diff_report(struct ProfileElement **want, int want_n, xmlDocPtr want_xml,
+                struct ProfileElement **have, int have_n, xmlDocPtr have_xml);
+
 #endif /* EUICC_H */

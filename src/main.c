@@ -6,6 +6,7 @@
  *   euicc build   value notation in, DER out
  *   euicc show    DER in, value notation out
  *   euicc check   either in, a verdict out
+ *   euicc diff    what separates a source file from a package
  *
  * check is the one that needed a program rather than a pipeline. A profile
  * package fails in two ways, and until now two tools reported them. The schema
@@ -392,16 +393,74 @@ cmd_check(const char *in, int as_text, const char *rules, const char *skel,
     return (errors + bad) || (strict && warnings) ? 1 : 0;
 }
 
+/*
+ * diff compares a source file against a package. It writes nothing and judges
+ * nothing: `check` states whether a package is correct, and repeating that
+ * here would be a second answer to the same question.
+ *
+ * The comparison earns its place where git diff cannot go, with text on one
+ * side and bytes on the other.
+ */
+static int
+cmd_diff(const char *a_path, const char *b_path) {
+    if(!a_path || !b_path) {
+        fprintf(stderr, "euicc: diff needs two files\n");
+        return 2;
+    }
+
+    ProfileElement_t *a[MAX_PE], *b[MAX_PE];
+    int a_lines[MAX_PE], b_lines[MAX_PE];
+    size_t alen = 0, blen = 0;
+    int rc = 1;
+    xmlDocPtr ax = NULL, bx = NULL;
+
+    unsigned char *abuf = slurp(a_path, &alen);
+    if(!abuf) return 1;
+    unsigned char *bbuf = slurp(b_path, &blen);
+    if(!bbuf) { free(abuf); return 1; }
+
+    int an = read_package(abuf, alen, looks_like_text(abuf, alen), a, a_lines, MAX_PE);
+    if(an < 0) {
+        fprintf(stderr, "euicc: cannot read %s: %s\n", a_path, g_parse_error);
+        goto done;
+    }
+    int bn = read_package(bbuf, blen, looks_like_text(bbuf, blen), b, b_lines, MAX_PE);
+    if(bn < 0) {
+        fprintf(stderr, "euicc: cannot read %s: %s\n", b_path, g_parse_error);
+        goto done;
+    }
+
+    ax = package_to_xml(a, an);
+    bx = package_to_xml(b, bn);
+    if(!ax || !bx) {
+        fprintf(stderr, "euicc: cannot render a package as XML\n");
+        goto done;
+    }
+
+    printf("%s against %s:\n\n", a_path, b_path);
+    rc = diff_report((struct ProfileElement **)a, an, ax,
+                     (struct ProfileElement **)b, bn, bx) < 0 ? 1 : 0;
+
+done:
+    if(ax) xmlFreeDoc(ax);
+    if(bx) xmlFreeDoc(bx);
+    free(abuf);
+    free(bbuf);
+    return rc;
+}
+
 /* ---- entry --------------------------------------------------------------- */
 
 static void
 usage(void) {
     fputs(
         "usage: euicc <command> [options] [file]\n"
+        "       euicc diff <source> <package>\n"
         "\n"
         "  build    value notation in, DER out\n"
         "  show     DER in, value notation out\n"
         "  check    either in, a verdict out\n"
+        "  diff     what separates a source file from a package\n"
         "\n"
         "options:\n"
         "  -o FILE     write here instead of to stdout\n"
@@ -410,6 +469,7 @@ usage(void) {
         "  -a          show: add X.680 comments\n"
         "  -s          check: a warning fails the run too\n"
         "  --json      check: one JSON object, for an editor or a script\n"
+
         "  --rules DIR the rule set, default " EUICC_RULES_DIR "\n"
         "  --skel DIR  the ISO Schematron transforms\n"
         "\n"
@@ -425,6 +485,7 @@ main(int argc, char **argv) {
     const char *in = NULL, *out = NULL;
     const char *rules = EUICC_RULES_DIR, *skel = EUICC_SKEL_DIR;
     int as_text = -1, annotated = 0, strict = 0, as_json = 0;
+    const char *second = NULL;
 
     for(int i = 2; i < argc; i++) {
         if(!strcmp(argv[i], "-o") && i + 1 < argc) out = argv[++i];
@@ -435,15 +496,21 @@ main(int argc, char **argv) {
         else if(!strcmp(argv[i], "-a")) annotated = 1;
         else if(!strcmp(argv[i], "-s")) strict = 1;
         else if(!strcmp(argv[i], "--json")) as_json = 1;
+
         else if(argv[i][0] == '-' && argv[i][1]) { usage(); return 2; }
+        else if(!second) second = argv[i];
         else in = argv[i];
     }
+
+    /* Every command but diff takes one file, and it arrives first. */
+    if(strcmp(cmd, "diff") != 0 && !in) { in = second; second = NULL; }
 
     xmlInitParser();
     int rc;
     if(!strcmp(cmd, "build")) rc = cmd_build(in, out, as_text);
     else if(!strcmp(cmd, "show")) rc = cmd_show(in, as_text, annotated);
     else if(!strcmp(cmd, "check")) rc = cmd_check(in, as_text, rules, skel, strict, as_json);
+    else if(!strcmp(cmd, "diff")) rc = cmd_diff(second, in);
     else { usage(); rc = 2; }
 
     xsltCleanupGlobals();

@@ -46,5 +46,17 @@ for d in "$root"/vendor/euicc-profile-tool/testdata/*.der; do
   "$E" check "$d" >/dev/null 2>&1 && ok "clean: $(basename "$d")" || bad "clean: $(basename "$d")"
 done
 
+# diff: the same source against the package it produced shows nothing.
+"$E" diff "$tmp/good.vn" "$tmp/good.der" 2>/dev/null | grep -q "no difference" \
+  && ok "a source matches the package it built" || bad "a source matches the package it built"
+
+sed 's/minor-version 3/minor-version 4/' "$tmp/good.vn" > "$tmp/v4.vn"
+"$E" diff "$tmp/v4.vn" "$tmp/good.der" 2>/dev/null | grep -q "1 changed" \
+  && ok "a changed value is reported" || bad "a changed value is reported"
+
+# Order carries meaning here, and a hexdump does not show it.
+"$E" diff "$tmp/bad.vn" "$tmp/good.der" 2>/dev/null | grep -q "different order" \
+  && ok "a reordering is reported" || bad "a reordering is reported"
+
 printf '\n%d ok, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
