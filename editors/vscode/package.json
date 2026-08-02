@@ -1,0 +1,80 @@
+{
+  "name": "euicc-vn",
+  "displayName": "eUICC profile packages",
+  "version": "0.1.0",
+  "description": "Write eUICC profile packages in ASN.1 value notation, with the rules checked as you save.",
+  "publisher": "waigel",
+  "license": "MIT",
+  "private": true,
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onLanguage:asn1-vn"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "asn1-vn",
+        "aliases": [
+          "ASN.1 value notation"
+        ],
+        "extensions": [
+          ".vn",
+          ".asn1vn"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "asn1-vn",
+        "scopeName": "source.asn1-vn",
+        "path": "./syntaxes/asn1-vn.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "eUICC",
+      "properties": {
+        "euicc.path": {
+          "type": "string",
+          "default": "euicc",
+          "description": "The euicc command. A path, or a name on PATH."
+        },
+        "euicc.rules": {
+          "type": "string",
+          "default": "",
+          "description": "The rule set. Empty uses the one compiled into euicc."
+        },
+        "euicc.checkOn": {
+          "type": "string",
+          "enum": [
+            "save",
+            "type"
+          ],
+          "default": "save",
+          "description": "When to check. Checking on every keystroke runs euicc on text that is still being written."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "watch": "tsc -watch -p ."
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.4.0"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1",
+    "vscode-languageserver": "^9.0.1",
+    "vscode-languageserver-textdocument": "^1.0.11"
+  }
+}

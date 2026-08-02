@@ -1,0 +1,102 @@
+{
+  "$comment": "A TextMate grammar for ASN.1 value notation. Shared with asn1-docs, which uses it to colour schema listings. Highlighting says whether text looks like ASN.1. Whether it is a correct profile is what euicc check says.",
+  "name": "asn1-vn",
+  "displayName": "ASN.1 value notation",
+  "aliases": [
+    "asn1vn"
+  ],
+  "scopeName": "source.asn1-vn",
+  "patterns": [
+    {
+      "include": "#comment-line"
+    },
+    {
+      "include": "#comment-block"
+    },
+    {
+      "include": "#hexstring"
+    },
+    {
+      "include": "#binstring"
+    },
+    {
+      "include": "#cstring"
+    },
+    {
+      "include": "#tag"
+    },
+    {
+      "include": "#assign"
+    },
+    {
+      "include": "#keyword-structure"
+    },
+    {
+      "include": "#keyword-builtin"
+    },
+    {
+      "include": "#keyword-modifier"
+    },
+    {
+      "include": "#number"
+    },
+    {
+      "include": "#typeref"
+    }
+  ],
+  "repository": {
+    "comment-line": {
+      "comment": "X.680 12.6.3: a line comment ends at a newline or at a second --",
+      "match": "--.*?(--|$)",
+      "name": "comment.line.double-dash.asn1"
+    },
+    "comment-block": {
+      "begin": "/\\*",
+      "end": "\\*/",
+      "name": "comment.block.asn1"
+    },
+    "hexstring": {
+      "match": "'[0-9A-Fa-f\\s]*'[Hh]",
+      "name": "string.quoted.other.hex.asn1"
+    },
+    "binstring": {
+      "match": "'[01\\s]*'[Bb]",
+      "name": "string.quoted.other.binary.asn1"
+    },
+    "cstring": {
+      "begin": "\"",
+      "end": "\"",
+      "name": "string.quoted.double.asn1"
+    },
+    "tag": {
+      "comment": "[3], [APPLICATION 2], [PRIVATE 6]",
+      "match": "\\[\\s*(UNIVERSAL|APPLICATION|PRIVATE|CONTEXT)?\\s*\\d*\\s*\\]",
+      "name": "entity.other.attribute-name.tag.asn1"
+    },
+    "assign": {
+      "match": "::=",
+      "name": "keyword.operator.assignment.asn1"
+    },
+    "keyword-structure": {
+      "match": "\\b(SEQUENCE|SET|CHOICE|ENUMERATED|OF|DEFINITIONS|BEGIN|END|IMPORTS|EXPORTS|FROM)\\b",
+      "name": "keyword.control.asn1"
+    },
+    "keyword-builtin": {
+      "match": "\\b(INTEGER|BOOLEAN|NULL|REAL|BIT|OCTET|STRING|OBJECT|IDENTIFIER|UTF8String|PrintableString|IA5String|NumericString|VisibleString|TeletexString|UniversalString|BMPString|GeneralizedTime|UTCTime|ANY|EXTERNAL|RELATIVE-OID)\\b",
+      "name": "support.type.asn1"
+    },
+    "keyword-modifier": {
+      "match": "\\b(OPTIONAL|DEFAULT|IMPLICIT|EXPLICIT|AUTOMATIC|TAGS|SIZE|WITH|COMPONENTS|COMPONENT|PRESENT|ABSENT|CONSTRAINED|BY|INCLUDES|MIN|MAX|TRUE|FALSE|UNION|INTERSECTION|EXCEPT)\\b",
+      "name": "storage.type.asn1"
+    },
+    "number": {
+      "match": "\\b\\d+\\b",
+      "name": "constant.numeric.asn1"
+    },
+    "typeref": {
+      "comment": "X.680 12.2: a type reference begins with an upper case letter",
+      "match": "\\b[A-Z][A-Za-z0-9-]*\\b",
+      "name": "entity.name.class.asn1"
+    }
+  }
+}

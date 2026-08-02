@@ -72,6 +72,26 @@ make check
 The rules are not copied here. They stay where they are written and are read
 from the submodule, so a correction there needs no change in this repository.
 
+## In an editor
+
+`editors/vscode` holds an extension and a language server. The server runs
+`euicc check --json` and turns the report into diagnostics. It parses no ASN.1
+and evaluates no rule of its own, so the editor cannot report something that the
+build does not.
+
+```sh
+cd editors/vscode && npm install && npm run compile
+```
+
+Then open the folder in VS Code and press F5.
+
+The server speaks LSP over stdio, so it is not only for VS Code. Neovim and
+Helix start `node out/server.js --stdio` the same way.
+
+A parse error is marked where it is, because the reader states a line and a
+column. A rule failure is marked on the first line of the profile element it
+belongs to: a rule names an element, and not a position in a file.
+
 ## What it does not do
 
 `euicc` does not read the specification. Each rule cites the clause it comes

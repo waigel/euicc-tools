@@ -29,6 +29,11 @@
 
 #define MAX_PE 4096
 
+/* The reader fails at one place at a time, and both the text report and the
+   JSON report want the same detail. */
+static char g_parse_error[512];
+static int g_parse_element;
+
 /* ---- input --------------------------------------------------------------- */
 
 static unsigned char *
@@ -65,10 +70,25 @@ looks_like_text(const unsigned char *b, size_t n) {
     return n > 0;
 }
 
-/* Every ProfileElement in the input, decoded. Returns the count, or -1. */
+/* The 1-based line that an offset falls on. */
+static int
+line_at(const unsigned char *buf, size_t off) {
+    int line = 1;
+    for(size_t i = 0; i < off; i++)
+        if(buf[i] == '\n') line++;
+    return line;
+}
+
+/*
+ * Every ProfileElement in the input, decoded. Returns the count, or -1.
+ *
+ * The line each value starts on is recorded as well. A constraint failure and
+ * a rule failure both name an element and not a position, and an editor needs
+ * a position to mark. The line of the element is the closest true answer.
+ */
 static int
 read_package(const unsigned char *buf, size_t len, int as_text,
-             ProfileElement_t **out, size_t max) {
+             ProfileElement_t **out, int *lines, size_t max) {
     size_t off = 0;
     int n = 0;
 
@@ -87,6 +107,7 @@ read_package(const unsigned char *buf, size_t len, int as_text,
             fprintf(stderr, "euicc: more than %zu profile elements\n", max);
             return -1;
         }
+        if(lines) lines[n] = as_text ? line_at(buf, off) : 1;
         out[n] = NULL;
         asn_dec_rval_t rv;
         if(as_text) {
@@ -98,8 +119,9 @@ read_package(const unsigned char *buf, size_t len, int as_text,
             rv = vn_decode(0, &asn_DEF_ProfileElement, (void **)&out[n], &ro,
                            buf + off, len - off);
             if(rv.code != RC_OK) {
-                fprintf(stderr, "euicc: cannot read profile element %d: %s\n",
-                        n + 1, reason[0] ? reason : "not value notation");
+                snprintf(g_parse_error, sizeof g_parse_error, "%s",
+                         reason[0] ? reason : "not value notation");
+                g_parse_element = n + 1;
                 return -1;
             }
         } else {
@@ -160,6 +182,42 @@ package_to_xml(ProfileElement_t **pe, int n) {
     return doc;
 }
 
+/* ---- machine-readable report --------------------------------------------- */
+
+static void
+json_str(const char *v) {
+    putchar('"');
+    for(const char *c = v ? v : ""; *c; c++) {
+        if(*c == '"' || *c == '\\') printf("\\%c", *c);
+        else if((unsigned char)*c < 0x20) printf("\\u%04x", *c);
+        else putchar(*c);
+    }
+    putchar('"');
+}
+
+/*
+ * An SVRL location is an XPath, and the part this needs is which profile
+ * element it points at: /ProfilePackage/ProfileElement[2]/... yields 2. A
+ * location without an index belongs to the package and gets element 0.
+ */
+static int
+element_of(const char *location) {
+    const char *m = location ? strstr(location, "ProfileElement[") : NULL;
+    return m ? atoi(m + strlen("ProfileElement[")) : 0;
+}
+
+static void
+json_finding(int first, const char *severity, const char *code,
+             const char *text, int line, int column, const char *source) {
+    printf("%s\n  {", first ? "" : ",");
+    printf("\"severity\": "); json_str(severity);
+    printf(", \"code\": ");   json_str(code);
+    printf(", \"message\": "); json_str(text);
+    printf(", \"line\": %d, \"column\": %d", line, column);
+    if(source) { printf(", \"source\": "); json_str(source); }
+    putchar('}');
+}
+
 /* ---- commands ------------------------------------------------------------ */
 
 static int
@@ -170,7 +228,8 @@ cmd_build(const char *in, const char *out, int as_text) {
     if(as_text < 0) as_text = looks_like_text(buf, len);
 
     ProfileElement_t *pe[MAX_PE];
-    int n = read_package(buf, len, as_text, pe, MAX_PE);
+    int lines[MAX_PE];
+    int n = read_package(buf, len, as_text, pe, lines, MAX_PE);
     free(buf);
     if(n < 0) return 1;
 
@@ -212,7 +271,8 @@ cmd_show(const char *in, int as_text, int annotated) {
     if(as_text < 0) as_text = looks_like_text(buf, len);
 
     ProfileElement_t *pe[MAX_PE];
-    int n = read_package(buf, len, as_text, pe, MAX_PE);
+    int lines[MAX_PE];
+    int n = read_package(buf, len, as_text, pe, lines, MAX_PE);
     free(buf);
     if(n < 0) return 1;
 
@@ -228,23 +288,47 @@ cmd_show(const char *in, int as_text, int annotated) {
 
 static int
 cmd_check(const char *in, int as_text, const char *rules, const char *skel,
-          int strict) {
+          int strict, int as_json) {
     size_t len = 0;
     unsigned char *buf = slurp(in, &len);
     if(!buf) return 1;
     if(as_text < 0) as_text = looks_like_text(buf, len);
 
     ProfileElement_t *pe[MAX_PE];
-    int n = read_package(buf, len, as_text, pe, MAX_PE);
+    int lines[MAX_PE];
+    int n = read_package(buf, len, as_text, pe, lines, MAX_PE);
+    if(n < 0) {
+        /* The reader states a line and a column. An editor can mark that
+           exactly, which is the one case where it can. */
+        int line = 1, column = 1;
+        sscanf(g_parse_error, "line %d column %d", &line, &column);
+        const char *colon = strstr(g_parse_error, ": ");
+        const char *msg = colon ? colon + 2 : g_parse_error;
+        if(as_json) {
+            printf("{\n \"findings\": [");
+            json_finding(1, "error", "parse", msg, line, column, NULL);
+            printf("\n ],\n \"elements\": 0,\n \"fired\": 0\n}\n");
+        } else {
+            fprintf(stderr, "euicc: cannot read profile element %d: %s\n",
+                    g_parse_element, g_parse_error);
+        }
+        free(buf);
+        return 1;
+    }
     free(buf);
-    if(n < 0) return 1;
 
-    int bad = 0;
+    int bad = 0, first = 1;
+    if(as_json) printf("{\n \"findings\": [");
     for(int i = 0; i < n; i++) {
         char reason[512];
         size_t rlen = sizeof reason;
         if(vn_check_constraints(&asn_DEF_ProfileElement, pe[i], reason, &rlen) != 0) {
-            printf("  schema   profile element %d: %s\n", i + 1, reason);
+            if(as_json) {
+                json_finding(first, "error", "schema", reason, lines[i], 1, NULL);
+                first = 0;
+            } else {
+                printf("  schema   profile element %d: %s\n", i + 1, reason);
+            }
             bad++;
         }
     }
@@ -271,9 +355,26 @@ cmd_check(const char *in, int as_text, const char *rules, const char *skel,
         sch_finding_t *f = &res.findings[i];
         int is_warning = f->role && !strcmp(f->role, "warning");
         if(is_warning) warnings++; else errors++;
-        printf("  %-8s %-13s %s\n", is_warning ? "warning" : "error",
-               f->id ? f->id : "?", f->text ? f->text : "");
-        if(f->location) printf("           %-13s %s\n", "at", f->location);
+        if(as_json) {
+            int idx = element_of(f->location);
+            json_finding(first, is_warning ? "warning" : "error",
+                         f->id ? f->id : "?", f->text ? f->text : "",
+                         idx > 0 && idx <= n ? lines[idx - 1] : 1, 1,
+                         f->rule_file);
+            first = 0;
+        } else {
+            printf("  %-8s %-13s %s\n", is_warning ? "warning" : "error",
+                   f->id ? f->id : "?", f->text ? f->text : "");
+            if(f->location) printf("           %-13s %s\n", "at", f->location);
+        }
+    }
+
+    if(as_json) {
+        printf("\n ],\n \"elements\": %d,\n \"fired\": %zu\n}\n", n, res.fired);
+        sch_result_free(&res);
+        xmlFreeDoc(doc);
+        sch_close(e);
+        return (errors + bad) || (strict && warnings) ? 1 : 0;
     }
 
     /* The count is not decoration. A rule whose context does not occur in a
@@ -308,6 +409,7 @@ usage(void) {
         "  -b          the input is DER or BER\n"
         "  -a          show: add X.680 comments\n"
         "  -s          check: a warning fails the run too\n"
+        "  --json      check: one JSON object, for an editor or a script\n"
         "  --rules DIR the rule set, default " EUICC_RULES_DIR "\n"
         "  --skel DIR  the ISO Schematron transforms\n"
         "\n"
@@ -322,7 +424,7 @@ main(int argc, char **argv) {
     const char *cmd = argv[1];
     const char *in = NULL, *out = NULL;
     const char *rules = EUICC_RULES_DIR, *skel = EUICC_SKEL_DIR;
-    int as_text = -1, annotated = 0, strict = 0;
+    int as_text = -1, annotated = 0, strict = 0, as_json = 0;
 
     for(int i = 2; i < argc; i++) {
         if(!strcmp(argv[i], "-o") && i + 1 < argc) out = argv[++i];
@@ -332,6 +434,7 @@ main(int argc, char **argv) {
         else if(!strcmp(argv[i], "-b")) as_text = 0;
         else if(!strcmp(argv[i], "-a")) annotated = 1;
         else if(!strcmp(argv[i], "-s")) strict = 1;
+        else if(!strcmp(argv[i], "--json")) as_json = 1;
         else if(argv[i][0] == '-' && argv[i][1]) { usage(); return 2; }
         else in = argv[i];
     }
@@ -340,7 +443,7 @@ main(int argc, char **argv) {
     int rc;
     if(!strcmp(cmd, "build")) rc = cmd_build(in, out, as_text);
     else if(!strcmp(cmd, "show")) rc = cmd_show(in, as_text, annotated);
-    else if(!strcmp(cmd, "check")) rc = cmd_check(in, as_text, rules, skel, strict);
+    else if(!strcmp(cmd, "check")) rc = cmd_check(in, as_text, rules, skel, strict, as_json);
     else { usage(); rc = 2; }
 
     xsltCleanupGlobals();
