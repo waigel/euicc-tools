@@ -39,12 +39,14 @@ import { TextDocument } from "vscode-languageserver-textdocument";
 
 import {
   analyze,
+  assignmentLine,
   declarationLine,
   describe,
   memberAt,
   readableType,
   Schema,
   suggest,
+  wordAt,
 } from "./schema";
 
 interface Finding {
@@ -115,6 +117,8 @@ connection.onInitialize((_params: InitializeParams) => ({
       resolveProvider: false,
     },
     hoverProvider: true,
+    definitionProvider: true,
+    typeDefinitionProvider: true,
   },
 }));
 
@@ -495,6 +499,84 @@ connection.onHover(async (params) => {
   if (path.length > 1) lines.push(`\nIn \`${path.join(" / ")}\`.`);
 
   return { contents: { kind: MarkupKind.Markdown, value: lines.join("\n") } };
+});
+
+/* ---- going to the schema --------------------------------------------------- */
+
+/*
+ * A profile is written against a schema that lives in another file, and until
+ * now the only way in was a link on a finding. TypeScript registers both a
+ * definition and a type definition provider, and both mean something here:
+ *
+ *   definition       the line of the ASN.1 that declares this name -- the
+ *                    member, or the assignment if the name is a type
+ *   type definition  the assignment of the member's type, which is where the
+ *                    value being written is actually described
+ *
+ * On `mf File,` the first goes to that line and the second to `File ::=`.
+ */
+function asnLocation(schema: Schema, line: number | null) {
+  if (line === null || !schema.source) return null;
+  let asn: string;
+  try {
+    asn = readFileSync(schema.source, "utf8");
+  } catch {
+    return null;
+  }
+  return {
+    uri: pathToFileURL(schema.source).toString(),
+    range: {
+      start: { line, character: 0 },
+      end: { line, character: (asn.split("\n")[line] ?? "").length },
+    },
+  };
+}
+
+async function schemaAndAsn(uri: string) {
+  if (settingsReady) await settingsReady;
+  const doc = documents.get(uri);
+  if (!doc || doc.languageId !== "asn1-vn") return null;
+  const schema = await loadSchema();
+  if (!schema?.source) return null;
+  let asn: string;
+  try {
+    asn = readFileSync(schema.source, "utf8");
+  } catch {
+    return null;
+  }
+  return { doc, schema, asn };
+}
+
+connection.onDefinition(async (params) => {
+  const got = await schemaAndAsn(params.textDocument.uri);
+  if (!got) return null;
+  const { doc, schema, asn } = got;
+  const text = doc.getText();
+  const offset = doc.offsetAt(params.position);
+
+  const found = memberAt(schema, text, offset);
+  if (found)
+    return asnLocation(schema, declarationLine(asn, found.owner, found.member.name));
+
+  /* A type reference, which is written where a member name is not. */
+  const word = wordAt(text, offset);
+  if (word && schema.types[word])
+    return asnLocation(schema, assignmentLine(asn, word));
+  return null;
+});
+
+connection.onTypeDefinition(async (params) => {
+  const got = await schemaAndAsn(params.textDocument.uri);
+  if (!got) return null;
+  const { doc, schema, asn } = got;
+  const found = memberAt(schema, doc.getText(), doc.offsetAt(params.position));
+  if (!found) return null;
+  /* A builtin has no assignment to go to; the declaration is the closest
+     thing to one, and going nowhere would be worse than going there. */
+  const line = schema.types[found.member.type]
+    ? assignmentLine(asn, found.member.type)
+    : declarationLine(asn, found.owner, found.member.name);
+  return asnLocation(schema, line);
 });
 
 documents.onDidSave((e) => void check(e.document));

@@ -43,15 +43,6 @@ export interface Schema {
 }
 
 /*
- * The line a member is declared on, or null.
- *
- * A text search and not a parse: it finds the type's assignment and then the
- * first line inside it that begins with the member's name. The schema itself
- * comes from asn1c's descriptors and never from here, so a miss costs a link
- * and nothing else -- which is why a search is enough and a second ASN.1
- * parser would be too much.
- */
-/*
  * An inline type has no name in the ASN.1; `euicc schema` gives it the key the
  * annotation table would use, Parent__member. A reader has never seen that.
  *
@@ -69,6 +60,29 @@ export function readableType(name: string): string {
   return rest === "Member" ? name.slice(0, i) : `${name.slice(0, i)}.${rest}`;
 }
 
+const esc = (s: string) => s.replace(/[-[\]{}()*+?.\\^$|]/g, "\\$&");
+
+/*
+ * The line that assigns a type: `File ::= SEQUENCE OF CHOICE {`. An inline
+ * type has no assignment of its own, so it lands on the one that holds it,
+ * which is the nearest thing the ASN.1 has to a definition of it.
+ */
+export function assignmentLine(asn: string, type: string): number | null {
+  const head = new RegExp(`^${esc(type.split("__")[0])}\\s*::=`);
+  const lines = asn.split("\n");
+  for (let i = 0; i < lines.length; i++) if (head.test(lines[i])) return i;
+  return null;
+}
+
+/*
+ * The line a member is declared on, or null.
+ *
+ * A text search and not a parse: it finds the type's assignment and then the
+ * first line inside it that begins with the member's name. The schema itself
+ * comes from asn1c's descriptors and never from here, so a miss costs a link
+ * and nothing else -- which is why a search is enough and a second ASN.1
+ * parser would be too much.
+ */
 export function declarationLine(
   asn: string,
   type: string,
@@ -77,9 +91,8 @@ export function declarationLine(
   const lines = asn.split("\n");
   /* An inline type is declared inside the assignment of the type it sits in,
      and only that assignment has a name to search for. */
-  const outer = type.split("__")[0];
-  const head = new RegExp(`^${outer.replace(/[-[\]{}()*+?.\\^$|]/g, "\\$&")}\\s*::=`);
-  const field = new RegExp(`^\\s*${member.replace(/[-[\]{}()*+?.\\^$|]/g, "\\$&")}\\s`);
+  const head = new RegExp(`^${esc(type.split("__")[0])}\\s*::=`);
+  const field = new RegExp(`^\\s*${esc(member)}\\s`);
   let inside = false;
   for (let i = 0; i < lines.length; i++) {
     if (!inside) {
@@ -318,6 +331,15 @@ export function analyze(schema: Schema, text: string, offset: number): Context {
  * where it begins. Nothing expected there means it names a member of the type
  * the braces hold; a CHOICE expected means it names one of its alternatives.
  */
+/* The identifier the cursor is inside, or "". */
+export function wordAt(text: string, offset: number): string {
+  let a = offset;
+  while (a > 0 && WORD.test(text[a - 1])) a--;
+  let b = offset;
+  while (b < text.length && WORD.test(text[b])) b++;
+  return text.slice(a, b);
+}
+
 export function memberAt(
   schema: Schema,
   text: string,

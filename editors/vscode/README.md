@@ -11,6 +11,7 @@ Interoperable Format*, version 3.4.1, which the industry calls SAIP.
 - Highlights `.vn` and `.asn1vn` files.
 - Offers the members allowed at the cursor, with their types.
 - Shows a member's type and whether it may be left out, on hover.
+- Goes to the line of the ASN.1 that declares a name.
 - Reports the errors that `euicc check` reports, as you write them.
 
 A profile package fails in two ways. The ASN.1 module states what a value may
@@ -57,8 +58,6 @@ If `euicc` is somewhere else, set `euicc.path`.
 | `euicc.checkDelay` | Milliseconds of quiet before a check while typing. |
 | `euicc.docs` | Where the rule pages are. Empty leaves the codes plain. |
 
-## What it does not do
-
 The extension parses no ASN.1 and evaluates no rule. Every diagnostic comes from
 `euicc`, so the editor cannot report something that the build does not.
 
@@ -79,6 +78,22 @@ words, taken from the compiler that ships inside VS Code:
     Type 'hstring' is not assignable to type 'UTF8String'.
       profile-3.4.1.asn(76): The expected type comes from property
       'profileType' which is declared here on type 'ProfileHeader'
+
+## Going to the schema
+
+A profile is written against a schema in another file, and both ways in are
+the ones TypeScript registers:
+
+| | |
+| --- | --- |
+| Go to Definition | the line that declares this name, or the assignment if it is a type |
+| Go to Type Definition | the assignment of the member's type |
+
+On `mf File,` the first goes to that line and the second to `File ::=`. A
+built-in type has no assignment, so Go to Type Definition lands on the
+declaration instead of nowhere.
+
+## What it does not do
 
 A rule failure carries a link on its code, to the page for that rule: what it
 requires, the clause it comes from, and the `.sch` that states it. TypeScript

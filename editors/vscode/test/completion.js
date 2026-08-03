@@ -28,7 +28,9 @@ buildSync({
   platform: "node",
   format: "cjs",
 });
-const { analyze, suggest, memberAt, declarationLine, readableType } = require(out);
+const {
+  analyze, suggest, memberAt, declarationLine, assignmentLine, readableType,
+} = require(out);
 
 const schema = JSON.parse(execFileSync(EUICC, ["schema"], { maxBuffer: 8 << 20 }));
 
@@ -289,6 +291,30 @@ if (decl("PE-MF", "ef-imsi") === null) {
 if (decl("NoSuchType", "x") === null) {
   console.log("ok   an unknown type finds nothing"); pass++;
 } else { console.log("FAIL an unknown type finds nothing"); fail++; }
+
+/* ---- going to the schema -------------------------------------------------- */
+
+const srcLine = (n) => asn.split("\n")[n];
+for (const [type, want] of [
+  ["ProfileElement", /^ProfileElement\s*::=/],
+  ["File", /^File\s*::=/],
+  ["PE-MF", /^PE-MF\s*::=/],
+  /* An inline type has no assignment; the one that holds it is the closest
+     the ASN.1 has to a definition of it. */
+  ["File__Member", /^File\s*::=/],
+]) {
+  const at = assignmentLine(asn, type);
+  if (at !== null && want.test(srcLine(at))) {
+    console.log(`ok   ${type} goes to line ${at + 1}: ${srcLine(at).trim()}`);
+    pass++;
+  } else {
+    console.log(`FAIL ${type} went to ${at === null ? "nowhere" : srcLine(at)}`);
+    fail++;
+  }
+}
+if (assignmentLine(asn, "NoSuchType") === null) {
+  console.log("ok   an unknown type goes nowhere"); pass++;
+} else { console.log("FAIL an unknown type goes nowhere"); fail++; }
 
 console.log(`\n${pass} ok, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -61,7 +61,14 @@ srv.stdout.on("data", (d) => {
         console.log("FAIL: the server does not declare completion");
         process.exit(1);
       }
-      console.log("  completionProvider is declared");
+      for (const cap of ["completionProvider", "hoverProvider",
+                         "definitionProvider", "typeDefinitionProvider"]) {
+        if (!msg.result.capabilities[cap]) {
+          console.log(`FAIL: the server does not declare ${cap}`);
+          process.exit(1);
+        }
+      }
+      console.log("  completion, hover and both jumps are declared");
     }
 
     if (msg.method === "textDocument/publishDiagnostics" && !asked) {
@@ -192,7 +199,20 @@ srv.stdout.on("data", (d) => {
         console.log("FAIL: hover did not name the member and its type");
         process.exit(1);
       }
-      console.log("\ndiagnostics, completion, checking as you type, related info and hover");
+      /* And into the schema, which is where the answer to all of it lives. */
+      send({ jsonrpc: "2.0", id: 4, method: "textDocument/definition", params: {
+        textDocument: { uri: "file:///tmp/x.vn" },
+        position: { line: 2, character: 4 } } });
+    }
+
+    if (msg.id === 4) {
+      const r = msg.result;
+      if (!r || !/profile-3\.4\.1\.asn$/.test(r.uri)) {
+        console.log(`FAIL: definition went to ${r && r.uri}`);
+        process.exit(1);
+      }
+      console.log(`  definition -> ${r.uri.split("/").pop()}(${r.range.start.line + 1})`);
+      console.log("\ndiagnostics, completion, checking as you type, related info, hover and jumps");
       process.exit(0);
     }
   }
