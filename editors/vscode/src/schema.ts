@@ -179,69 +179,174 @@ export function analyze(schema: Schema, text: string, offset: number): Context {
 }
 
 /*
- * The brace depth each line should be indented to.
+ * The file laid out: one member to a line, indented by depth.
  *
- * Indentation only. `euicc show` writes canonical value notation and would be
- * a formatter for nothing but that it re-serialises a decoded value: every
- * comment is gone and `myHeader ProfileElement ::=` comes back as `value1`.
- * Format on save would delete documentation silently, so the only edit made
- * here is the whitespace at the start of a line, which cannot lose anything.
+ * Two things it deliberately does not do.
  *
- * A brace inside a comment or a string does not count, which is the same
- * reason the walk above skips them. A line inside a block comment is left
- * exactly as written: its layout is the author's.
+ * It does not go through `euicc show`. That writes canonical value notation and
+ * looks like a formatter until you notice it re-serialises a decoded value:
+ * every comment is gone and `myHeader ProfileElement ::=` comes back `value1`.
+ * Format on save would delete documentation without a word.
+ *
+ * It does not move anything but whitespace. The guarantee is that the text with
+ * every run of whitespace collapsed is unchanged, which is checked rather than
+ * assumed, so no comment, name or value can be lost however the layout moves.
+ *
+ * A brace or a comma inside a comment or a string is not one, which is why this
+ * skips them the way the walk above does. A quote is tracked across lines: the
+ * writer wraps a long hstring, X.680 12.12 ignores the whitespace inside one,
+ * and without that state the closing quote reads as an opening one and every
+ * brace after it on the line is lost.
  */
-export function indentation(text: string): (number | null)[] {
-  const lines = text.split("\n");
-  const want: (number | null)[] = [];
-  let depth = 0;
-  let inBlock = false;
-  /* An hstring may be written across lines -- X.680 12.12 ignores the
-     whitespace inside one -- and the writer wraps a long one. Its continuation
-     lines are laid out by whoever wrote them and are left alone; without this
-     state the closing quote reads as an opening one and the braces after it on
-     that line are lost. */
-  let inQuote: '"' | "'" | null = null;
+/* Past the spaces and at most one newline after a break we made ourselves, so
+   the newline that was already there does not become a blank line. */
+function swallow(text: string, i: number): number {
+  while (text[i] === " " || text[i] === "\t") i++;
+  if (text[i] === "\r") i++;
+  if (text[i] === "\n") {
+    i++;
+    while (text[i] === " " || text[i] === "\t") i++;
+  }
+  return i;
+}
 
-  for (const line of lines) {
-    if (inBlock || inQuote) {
-      want.push(null);
-      if (inBlock && line.includes("*/")) inBlock = false;
-      if (inQuote && line.includes(inQuote)) {
-        /* Continue scanning after the closing quote for braces on this line. */
-        const rest = line.slice(line.indexOf(inQuote) + 1);
-        inQuote = null;
-        for (let i = 0; i < rest.length; i++) {
-          if (rest[i] === "-" && rest[i + 1] === "-") break;
-          if (rest[i] === "{") depth++;
-          else if (rest[i] === "}") depth = Math.max(0, depth - 1);
-        }
-      }
+export function layout(text: string, unit = "    "): string {
+  const out: string[] = [];
+  let line = "";
+  let depth = 0;
+  let pending = 0; /* depth this line is written at, fixed when it starts */
+  let inBlock = false;
+  let inQuote: '"' | "'" | null = null;
+  let verbatim = false; /* a continuation line of a comment or an hstring */
+
+  const flush = () => {
+    const body = line.trim();
+    if (verbatim) out.push(line.replace(/\s+$/, ""));
+    else out.push(body ? unit.repeat(Math.max(0, pending)) + body : "");
+    line = "";
+    verbatim = inBlock || inQuote !== null;
+    pending = depth;
+  };
+
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+
+    if (c === "\n") { flush(); continue; }
+
+    if (inBlock) {
+      line += c;
+      if (c === "/" && text[i - 1] === "*") inBlock = false;
       continue;
     }
-    /* A closing brace belongs at the level of the thing it closes. */
-    want.push(Math.max(0, /^\s*[}\]]/.test(line) ? depth - 1 : depth));
-
-    for (let i = 0; i < line.length; i++) {
-      const c = line[i];
-      if (c === "-" && line[i + 1] === "-") break;
-      if (c === "/" && line[i + 1] === "*") {
-        const end = line.indexOf("*/", i + 2);
-        if (end < 0) { inBlock = true; break; }
-        i = end + 1;
-        continue;
-      }
-      if (c === '"' || c === "'") {
-        const end = line.indexOf(c, i + 1);
-        if (end < 0) { inQuote = c as '"' | "'"; break; }
-        i = end;
-        continue;
-      }
-      if (c === "{") depth++;
-      else if (c === "}") depth = Math.max(0, depth - 1);
+    if (inQuote) {
+      line += c;
+      if (c === inQuote) inQuote = null;
+      continue;
     }
+    if (c === "-" && text[i + 1] === "-") {
+      /* A line comment runs to the newline; take it whole. */
+      while (i < text.length && text[i] !== "\n") line += text[i++];
+      i--;
+      continue;
+    }
+    if (c === "/" && text[i + 1] === "*") { inBlock = true; line += "/*"; i++; continue; }
+    if (c === '"' || c === "'") { inQuote = c as '"' | "'"; line += c; continue; }
+
+    if (c === "}" || c === "]") {
+      /* The brace closes something, so it belongs at that level, and it starts
+         its own line unless the line so far is only whitespace. */
+      if (line.trim()) flush();
+      depth = Math.max(0, depth - 1);
+      pending = depth;
+      line += c;
+      continue;
+    }
+    if (c === "{" || c === "[") {
+      /*
+       * An OBJECT IDENTIFIER is a brace list of arcs and the writer keeps it on
+       * one line: `{ 2 23 143 1 2 1 }`. Breaking it would put six lines where
+       * the writer puts one, and the writer's output has to come back
+       * unchanged. Numbers only is what tells such a group from a value.
+       */
+      const close = text.indexOf(c === "{" ? "}" : "]", i + 1);
+      if (close > i && /^[0-9\s]*$/.test(text.slice(i + 1, close))) {
+        const inner = text.slice(i + 1, close).trim();
+        line += inner ? `${c} ${inner} ${text[close]}` : `${c} ${text[close]}`;
+        i = close;
+        continue;
+      }
+      line += c;
+      depth++;
+      flush();
+      i = swallow(text, i + 1) - 1;
+      continue;
+    }
+    if (c === ",") {
+      line += c;
+      /* A comment after the comma stays on the line it comments on. */
+      let j = i + 1;
+      while (j < text.length && (text[j] === " " || text[j] === "\t")) j++;
+      const trailing = text[j] === "-" && text[j + 1] === "-";
+      if (!trailing) { flush(); i = swallow(text, j) - 1; }
+      continue;
+    }
+    line += c;
   }
-  return want;
+  flush();
+
+  /* One trailing newline, and no run of blank lines longer than one. */
+  const joined = out.join("\n").replace(/\n{3,}/g, "\n\n").replace(/\s+$/, "");
+  return joined + "\n";
+}
+
+/*
+ * The tokens of a file, which layout may not change.
+ *
+ * Comparing the text with whitespace collapsed does not work, because inserting
+ * a line break where there was nothing at all adds whitespace that was not
+ * there -- `},ef-dir` becomes `}, ef-dir`. Comparing it with whitespace removed
+ * is too weak the other way: it would not notice `major-version 2` becoming
+ * `major-version2`. The token list is what a formatter must preserve exactly,
+ * so that is what is compared.
+ */
+export function tokens(text: string): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (/\s/.test(c)) continue;
+    if (c === "-" && text[i + 1] === "-") {
+      let j = i;
+      while (j < text.length && text[j] !== "\n") j++;
+      out.push(text.slice(i, j).trimEnd());
+      i = j - 1;
+      continue;
+    }
+    if (c === "/" && text[i + 1] === "*") {
+      const end = text.indexOf("*/", i + 2);
+      const j = end < 0 ? text.length : end + 2;
+      out.push(text.slice(i, j));
+      i = j - 1;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      const end = text.indexOf(c, i + 1);
+      const j = end < 0 ? text.length : end + 1;
+      /* An hstring may be wrapped over lines and the whitespace inside one is
+         not part of the value: X.680 12.12. */
+      out.push(text.slice(i, j).replace(/\s+/g, "") + (text[j] ?? ""));
+      i = /[HhBb]/.test(text[j] ?? "") ? j : j - 1;
+      continue;
+    }
+    if (WORD.test(c)) {
+      let j = i;
+      while (j < text.length && WORD.test(text[j])) j++;
+      out.push(text.slice(i, j));
+      i = j - 1;
+      continue;
+    }
+    out.push(c);
+  }
+  return out;
 }
 
 /* What an identifier turned out to be. */

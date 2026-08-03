@@ -47,7 +47,8 @@ import {
   classify,
   declarationLine,
   describe,
-  indentation,
+  layout,
+  tokens,
   memberAt,
   readableType,
   Schema,
@@ -602,27 +603,26 @@ connection.onDocumentFormatting((params): TextEdit[] => {
   const doc = documents.get(params.textDocument.uri);
   if (!doc || doc.languageId !== "asn1-vn") return [];
 
+  const before = doc.getText();
   const unit = params.options.insertSpaces
     ? " ".repeat(Math.max(1, params.options.tabSize))
     : "\t";
-  const lines = doc.getText().split("\n");
-  const want = indentation(doc.getText());
-  const edits: TextEdit[] = [];
+  const after = layout(before, unit);
+  if (after === before) return [];
 
-  for (let i = 0; i < lines.length; i++) {
-    const level = want[i];
-    if (level === null) continue;
-    const line = lines[i];
-    if (!line.trim()) continue;
-    const had = line.length - line.trimStart().length;
-    const should = unit.repeat(level);
-    if (line.slice(0, had) === should) continue;
-    edits.push({
-      range: { start: { line: i, character: 0 }, end: { line: i, character: had } },
-      newText: should,
-    });
+  /*
+   * The guarantee, checked here and not only in a test: whatever the layout
+   * moves, the text with every run of whitespace collapsed is the same. If it
+   * is not, the file is returned untouched -- a formatter that loses a comment
+   * is worse than one that does nothing.
+   */
+  if (tokens(after).join("\u0000") !== tokens(before).join("\u0000")) {
+    connection.console.warn("euicc: formatting would have changed the file, so it did not");
+    return [];
   }
-  return edits;
+
+  const end = doc.positionAt(before.length);
+  return [{ range: { start: { line: 0, character: 0 }, end }, newText: after }];
 });
 
 /* ---- fixing it --------------------------------------------------------------- */

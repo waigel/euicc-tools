@@ -14,7 +14,7 @@ Interoperable Format*, version 3.4.1, which the industry calls SAIP.
 - Goes to the line of the ASN.1 that declares a name.
 - Reports the errors that `euicc check` reports, as you write them, and offers
   the edit where it knows one.
-- Lays out the indentation, and nothing else.
+- Lays the file out: one member to a line, indented by depth.
 
 A profile package fails in two ways. The ASN.1 module states what a value may
 hold: a type, a size, a range. The specification states in prose what a package
@@ -134,15 +134,27 @@ names and from nothing else.
 
 ## Formatting
 
-Indentation only. `euicc show` writes canonical value notation and looks like a
-formatter until you notice it re-serialises a decoded value: every comment is
-gone and `myHeader ProfileElement ::=` comes back as `value1`. Format on save
-would delete documentation without a word.
+One member to a line, indented by depth. Nothing is moved but whitespace, and
+the guarantee is the token list: after a pass, the identifiers, literals and
+comments are the same ones in the same order.
 
-So the only edit is the whitespace at the start of a line, which cannot lose
-anything, and the tests check that rather than assume it. The writer's own
-output comes back unchanged, and a long hex string wrapped over lines is left
-as it was laid out -- X.680 12.12 ignores the whitespace inside one.
+`euicc show` writes canonical value notation and looks like a formatter until
+you notice it re-serialises a decoded value: every comment is gone and
+`myHeader ProfileElement ::=` comes back as `value1`. Format on save would
+delete documentation without a word, so this reads the text instead.
+
+Two things it settles by matching the writer. A long hex string wrapped over
+lines is left as the writer laid it out -- X.680 12.12 ignores the whitespace
+inside one. An OBJECT IDENTIFIER stays on one line, `{ 2 23 143 1 2 1 }`, which
+is what a numbers-only brace group is.
+
+## An HCL example
+
+`examples/comparison.tf` is the same profile written as HCL, for putting the two
+side by side with the HashiCorp Terraform extension installed. Nothing reads it;
+it is there because the differences are easier to see than to describe. HCL has
+an `=` between a name and its value, so a name is always a name. Value notation
+has nothing there, which is why this extension has two layers of colour.
 
 ## Licence
 

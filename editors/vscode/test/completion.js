@@ -30,7 +30,7 @@ buildSync({
 });
 const {
   analyze, suggest, memberAt, declarationLine, assignmentLine, readableType,
-  classify, indentation,
+  classify, layout, tokens,
 } = require(out);
 
 const schema = JSON.parse(execFileSync(EUICC, ["schema"], { maxBuffer: 8 << 20 }));
@@ -296,45 +296,48 @@ if (decl("NoSuchType", "x") === null) {
 /* ---- laying it out -------------------------------------------------------- */
 
 /*
- * Indentation and nothing else. `euicc show` writes canonical value notation
- * and looks like a formatter until you notice it re-serialises a decoded
- * value: every comment is gone and `myHeader ProfileElement ::=` comes back
- * `value1`. Format on save would delete documentation without a word, so the
- * only edit is the whitespace at the start of a line -- and that is checked
- * here rather than assumed.
+ * One member to a line, indented by depth, and nothing moved but whitespace.
+ *
+ * `euicc show` writes canonical value notation and looks like a formatter until
+ * you notice it re-serialises a decoded value: every comment is gone and
+ * `myHeader ProfileElement ::=` comes back `value1`. Format on save would
+ * delete documentation without a word, so this reads the text instead.
+ *
+ * The guarantee is the token list, not the whitespace. Comparing text with
+ * whitespace collapsed fails on a break inserted where there was nothing --
+ * `},ef-dir` becomes `}, ef-dir` -- and comparing it with whitespace removed
+ * would not notice `major-version 2` becoming `major-version2`.
  */
-const reindent = (text) => {
-  const lines = text.split("\n");
-  const want = indentation(text);
-  return lines
-    .map((l, i) => (want[i] === null || !l.trim() ? l : "    ".repeat(want[i]) + l.trimStart()))
-    .join("\n");
-};
-const bare = (t) => t.split("\n").map((l) => l.trimStart()).join("\n");
+const same = (a, b) => tokens(a).join("\u0000") === tokens(b).join("\u0000");
 
 {
   const messy = [
     "-- a header comment",
-    "myHeader ProfileElement ::= header : {",
-    "major-version 2,     -- keeps its place",
-    "        minor-version 3,",
-    "  eUICC-Mandatory-services { usim NULL },",
-    "/* a block",
-    "     comment laid out by hand */",
-    "  eUICC-Mandatory-GFSTEList {",
-    "{ 2 23 143 1 2 1 }",
-    "}",
+    "myHeader ProfileElement ::= mf : {",
+    /* Two members and a nested block on one line, which is what prompted this. */
+    "    mf-header { mandated NULL, identification 1 },ef-dir {",
+    "        fileDescriptor : {",
+    "fileDescriptor '4221'H,      -- linear fixed, so 4 bytes",
+    "            fileID '2F00'H",
+    "        }",
+    "    }",
     "}",
   ].join("\n");
-  const got = reindent(messy);
+  const got = layout(messy);
+  const lines = got.split("\n");
   const checks = [
-    ["nothing but leading whitespace changes", bare(messy) === bare(got)],
-    ["every comment survives",
-      (got.match(/--|\/\*/g) || []).length === (messy.match(/--|\/\*/g) || []).length],
+    ["the tokens are the same", same(messy, got)],
+    ["laying out twice is the same as once", layout(got) === got],
+    ["a member after a closing brace starts a line",
+      lines.some((l) => l === "    ef-dir {")],
+    ["two members on one line become two lines",
+      lines.some((l) => l === "        mandated NULL,") &&
+      lines.some((l) => l === "        identification 1")],
+    ["a comment stays on the line it comments on",
+      lines.some((l) => /fileDescriptor '4221'H,\s+-- linear fixed/.test(l))],
+    ["the header comment is still there", lines[0] === "-- a header comment"],
     ["the value reference keeps its name", got.includes("myHeader")],
-    ["a block comment keeps the layout it was given",
-      got.includes("     comment laid out by hand */")],
-    ["a nested brace is indented", got.includes("        { 2 23 143 1 2 1 }")],
+    ["no blank line is left where a break was made", !/\{\n\s*\n/.test(got)],
   ];
   for (const [what, okd] of checks) {
     console.log(`${okd ? "ok  " : "FAIL"} ${what}`);
@@ -344,30 +347,26 @@ const bare = (t) => t.split("\n").map((l) => l.trimStart()).join("\n");
 
 /*
  * The writer's own output must come back unchanged, or the two disagree about
- * what canonical means. It did: an hstring wrapped over lines is left as the
- * writer laid it out, and without tracking a quote across lines the closing
- * one read as an opening one and the braces after it were lost.
+ * what canonical means. Two things it settled: an hstring wrapped over lines is
+ * left as the writer laid it out, and an OBJECT IDENTIFIER stays on one line,
+ * which is what `{ 2 23 143 1 2 1 }` is and why numbers-only groups are not
+ * broken.
  */
 {
-  /* Written by euicc here rather than found somewhere: the point is that this
-     is the writer's own output, so the test has to ask the writer for it. */
   const der = path.join(__dirname, "..", "..", "..", "vendor", "euicc-profile-tool",
     "testdata", "TS48 V7.0 eSIM_GTP_SAIP2.3_NoBERTLV.der");
-  const real = fs.existsSync(der)
-    ? execFileSync(EUICC, ["show", der], { maxBuffer: 8 << 20 }).toString()
-    : null;
-  if (real === null) {
+  if (!fs.existsSync(der)) {
     console.log("skip  no published profile here, so the writer was not compared");
   } else {
-  const once = reindent(real);
-  const checks = [
-    ["the writer's output is already laid out", real === once],
-    ["laying out twice is the same as once", reindent(once) === once],
-  ];
-  for (const [what, okd] of checks) {
-    console.log(`${okd ? "ok  " : "FAIL"} ${what}`);
-    okd ? pass++ : fail++;
-  }
+    const real = execFileSync(EUICC, ["show", der], { maxBuffer: 8 << 20 }).toString();
+    const once = layout(real);
+    for (const [what, okd] of [
+      ["the writer's output is already laid out", real === once],
+      ["and its tokens survive a pass anyway", same(real, once)],
+    ]) {
+      console.log(`${okd ? "ok  " : "FAIL"} ${what}`);
+      okd ? pass++ : fail++;
+    }
   }
 }
 

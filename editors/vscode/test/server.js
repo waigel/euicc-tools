@@ -290,16 +290,31 @@ srv.stdout.on("data", (d) => {
 
     if (msg.id === 6) {
       const edits = msg.result || [];
-      /* Every edit replaces only the run of whitespace at the start of a line. */
-      const bad = edits.filter((e) =>
-        e.range.start.line !== e.range.end.line ||
-        e.range.start.character !== 0 ||
-        /\S/.test(e.newText));
-      if (bad.length) {
-        console.log(`FAIL: formatting edited more than indentation: ${JSON.stringify(bad[0])}`);
+      if (!edits.length) {
+        console.log("FAIL: formatting offered nothing on a file that needs it");
         process.exit(1);
       }
-      console.log(`  formatting offered ${edits.length} indentation edits and nothing else`);
+      /*
+       * The formatter moves lines, so "only leading whitespace" is no longer
+       * the invariant; the token list is. Comparing text with whitespace
+       * collapsed fails on a break put where there was nothing at all, and
+       * comparing it with whitespace removed would not notice two words
+       * running together.
+       */
+      const toks = (t) =>
+        (t.match(/--[^\n]*|\/\*[\s\S]*?\*\/|'[^']*'[HhBb]?|"[^"]*"|[A-Za-z0-9-]+|\S/g) || [])
+          .map((x) => x.replace(/\s+/g, ""));
+      const after = edits[0].newText;
+      if (toks(after).join("\u0000") !== toks(NOCOLON).join("\u0000")) {
+        console.log("FAIL: formatting changed more than the layout");
+        process.exit(1);
+      }
+      const lines = after.split("\n");
+      if (!lines.includes("        mandated NULL,")) {
+        console.log("FAIL: two members on one line were not split");
+        process.exit(1);
+      }
+      console.log(`  formatting rewrote the layout, ${lines.length} lines, same tokens`);
       console.log("\ndiagnostics, completion, checking as you type, related info," +
                   " hover, jumps, tokens, a fix and formatting");
       process.exit(0);
