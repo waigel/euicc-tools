@@ -32,6 +32,7 @@ import {
   InsertTextFormat,
   MarkupKind,
   ProposedFeatures,
+  SemanticTokensBuilder,
   TextDocuments,
   TextDocumentSyncKind,
 } from "vscode-languageserver/node";
@@ -40,6 +41,7 @@ import { TextDocument } from "vscode-languageserver-textdocument";
 import {
   analyze,
   assignmentLine,
+  classify,
   declarationLine,
   describe,
   memberAt,
@@ -100,6 +102,34 @@ function ruleDocs(code: string): { href: string } | undefined {
   };
 }
 
+/*
+ * What a word is, decided by the schema rather than by the punctuation around
+ * it. The grammar has to guess: a colon says alternative, a line start says
+ * member, and an identifier standing for a number looks like nothing at all.
+ * It guesses well enough to colour a file the moment it opens, before this
+ * server has started -- which is why both layers exist, in TypeScript as here.
+ *
+ * The types are our own with a standard superType, the arrangement the
+ * Terraform extension uses: a theme may style asn1Member directly and falls
+ * back to `property` otherwise. package.json pins each to the scope the
+ * grammar already uses, so this changes what a word IS and not what it looks
+ * like -- measured against both default dark themes, the colours are the same
+ * either way. Mapping to `property` and letting the defaults decide would put
+ * 39 per cent of a profile in the editor foreground under Dark 2026, which is
+ * where this started.
+ */
+const LEGEND = {
+  tokenTypes: ["asn1Member", "asn1Alternative", "asn1Value", "asn1Type"],
+  tokenModifiers: [] as string[],
+};
+
+const KIND_TO_TOKEN: Record<string, number> = {
+  member: 0,
+  alternative: 1,
+  value: 2,
+  type: 3,
+};
+
 const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);
 let settings: Settings = DEFAULTS;
@@ -119,6 +149,7 @@ connection.onInitialize((_params: InitializeParams) => ({
     hoverProvider: true,
     definitionProvider: true,
     typeDefinitionProvider: true,
+    semanticTokensProvider: { legend: LEGEND, full: true },
   },
 }));
 
@@ -519,6 +550,30 @@ connection.onHover(async (params) => {
   if (path.length > 1) lines.push(`\nIn \`${path.join(" / ")}\`.`);
 
   return { contents: { kind: MarkupKind.Markdown, value: lines.join("\n") } };
+});
+
+/* ---- what each word is ------------------------------------------------------ */
+
+connection.languages.semanticTokens.on(async (params) => {
+  const doc = documents.get(params.textDocument.uri);
+  const builder = new SemanticTokensBuilder();
+  if (!doc || doc.languageId !== "asn1-vn") return builder.build();
+  if (settingsReady) await settingsReady;
+
+  const schema = await loadSchema();
+  if (!schema) return builder.build();
+
+  /*
+   * Only what the schema recognises is reported. A name it does not know keeps
+   * whatever the grammar made of it: a semantic token can add a colour and
+   * never take one away, so a typo cannot be made to look like one this way.
+   * What marks it is the diagnostic.
+   */
+  for (const c of classify(schema, doc.getText())) {
+    const at = doc.positionAt(c.offset);
+    builder.push(at.line, at.character, c.length, KIND_TO_TOKEN[c.kind], 0);
+  }
+  return builder.build();
 });
 
 /* ---- going to the schema --------------------------------------------------- */

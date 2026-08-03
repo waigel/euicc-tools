@@ -175,8 +175,37 @@ const WORD = /[A-Za-z0-9-]/;
 export function analyze(schema: Schema, text: string, offset: number): Context {
   let start = offset;
   while (start > 0 && WORD.test(text[start - 1])) start--;
-  const partial = text.slice(start, offset);
+  return { ...scan(schema, text, start), partial: text.slice(start, offset) };
+}
 
+/* What an identifier turned out to be. */
+export interface Classified {
+  offset: number;
+  length: number;
+  kind: "member" | "alternative" | "value" | "type";
+}
+
+/*
+ * Every identifier in the file, and what the schema makes of it.
+ *
+ * The same walk completion uses, run to the end instead of to the cursor. A
+ * grammar has to guess some of this from punctuation -- a colon says
+ * alternative, a line start says member -- and guesses wrong where the
+ * punctuation is missing or the word is a value standing alone. Here the
+ * schema decides, and the editor is told rather than shown.
+ */
+export function classify(schema: Schema, text: string): Classified[] {
+  const out: Classified[] = [];
+  scan(schema, text, text.length, (c) => out.push(c));
+  return out;
+}
+
+function scan(
+  schema: Schema,
+  text: string,
+  stop: number,
+  emit?: (c: Classified) => void
+): Context {
   /*
    * The root frame encloses no braces: a file is a list of ProfileElement
    * values written directly, so what is expected there is one of those and
@@ -191,13 +220,13 @@ export function analyze(schema: Schema, text: string, offset: number): Context {
   const top = () => stack[stack.length - 1];
 
   let i = 0;
-  while (i < start) {
+  while (i < stop) {
     const c = text[i];
 
     /* X.680 12.6.3: a line comment ends at a newline or at a second --. */
     if (c === "-" && text[i + 1] === "-") {
       i += 2;
-      while (i < start && text[i] !== "\n") {
+      while (i < stop && text[i] !== "\n") {
         if (text[i] === "-" && text[i + 1] === "-") {
           i += 2;
           break;
@@ -208,21 +237,21 @@ export function analyze(schema: Schema, text: string, offset: number): Context {
     }
     if (c === "/" && text[i + 1] === "*") {
       i += 2;
-      while (i < start && !(text[i] === "*" && text[i + 1] === "/")) i++;
+      while (i < stop && !(text[i] === "*" && text[i + 1] === "/")) i++;
       i += 2;
       continue;
     }
     if (c === '"') {
       i++;
-      while (i < start && text[i] !== '"') i++;
+      while (i < stop && text[i] !== '"') i++;
       i++;
       continue;
     }
     if (c === "'") {
       i++;
-      while (i < start && text[i] !== "'") i++;
+      while (i < stop && text[i] !== "'") i++;
       i++;
-      if (i < start && /[HhBb]/.test(text[i])) i++;
+      if (i < stop && /[HhBb]/.test(text[i])) i++;
       continue;
     }
 
@@ -276,7 +305,7 @@ export function analyze(schema: Schema, text: string, offset: number): Context {
 
     if (/[A-Za-z]/.test(c)) {
       let j = i;
-      while (j < start && WORD.test(text[j])) j++;
+      while (j < stop && WORD.test(text[j])) j++;
       const word = text.slice(i, j);
       /*
        * Three things an identifier can be, and which one follows from what is
@@ -288,12 +317,21 @@ export function analyze(schema: Schema, text: string, offset: number): Context {
        *   anything else         part of the value, a NULL or an identifier
        *                         standing for a number, and not a name
        */
+      const here = (kind: Classified["kind"]) =>
+        emit?.({ offset: i, length: word.length, kind });
+
       if (expect === null) {
         const sc = nameScope(schema, top().type);
         const m = sc?.type.members?.find((x) => x.name === word);
         top().used.push(word);
         labels.push(word);
         owner = sc?.owner ?? null;
+        /*
+         * A member of a CHOICE is an alternative, and the two are written
+         * differently, so they are not the same thing to a reader either.
+         */
+        if (m) here(sc?.type.kind === "CHOICE" || sc?.type.kind === "OPEN TYPE"
+                    ? "alternative" : "member");
         expect = m ?? { name: word, type: "", optional: false };
       } else if (schema.types[expect.type]?.kind === "CHOICE"
                  || schema.types[expect.type]?.kind === "OPEN TYPE") {
@@ -301,7 +339,15 @@ export function analyze(schema: Schema, text: string, offset: number): Context {
           schema.types[expect.type].members?.find((x) => x.name === word);
         labels.push(word);
         owner = expect.type;
+        if (alt) here("alternative");
         expect = alt ?? { name: word, type: "", optional: false };
+      } else if (expect.names?.includes(word)) {
+        /* An identifier standing for a number, which is a value and not a
+           name -- the case a grammar cannot tell from a member at all. */
+        here("value");
+      } else if (schema.types[word]) {
+        /* A type reference, as in `valueN ProfileElement ::=`. */
+        here("type");
       }
       i = j;
       continue;
@@ -319,7 +365,8 @@ export function analyze(schema: Schema, text: string, offset: number): Context {
     path,
     used: top().used,
     expect,
-    partial,
+    /* analyze fills this in; a full-document scan has no word being typed. */
+    partial: "",
   };
 }
 

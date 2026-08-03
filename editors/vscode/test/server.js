@@ -27,6 +27,7 @@ let typed = false;
 let hovered = false;
 let colon = false;
 let jumped = false;
+let LEGEND = [];
 
 /* An alternative of a list written without its colon. */
 const NOCOLON =
@@ -72,13 +73,15 @@ srv.stdout.on("data", (d) => {
         process.exit(1);
       }
       for (const cap of ["completionProvider", "hoverProvider",
-                         "definitionProvider", "typeDefinitionProvider"]) {
+                         "definitionProvider", "typeDefinitionProvider",
+                         "semanticTokensProvider"]) {
         if (!msg.result.capabilities[cap]) {
           console.log(`FAIL: the server does not declare ${cap}`);
           process.exit(1);
         }
       }
-      console.log("  completion, hover and both jumps are declared");
+      console.log("  completion, hover, both jumps and semantic tokens are declared");
+      LEGEND = msg.result.capabilities.semanticTokensProvider.legend.tokenTypes;
     }
 
     if (msg.method === "textDocument/publishDiagnostics" && !asked) {
@@ -245,7 +248,27 @@ srv.stdout.on("data", (d) => {
         process.exit(1);
       }
       console.log(`  definition -> ${r.uri.split("/").pop()}(${r.range.start.line + 1})`);
-      console.log("\ndiagnostics, completion, checking as you type, related info, hover and jumps");
+
+      /* And what each word is, which only the schema can settle. */
+      send({ jsonrpc: "2.0", id: 5, method: "textDocument/semanticTokens/full",
+             params: { textDocument: { uri: "file:///tmp/x.vn" } } });
+    }
+
+    if (msg.id === 5) {
+      const data = (msg.result || {}).data || [];
+      if (!data.length) {
+        console.log("FAIL: no semantic tokens");
+        process.exit(1);
+      }
+      const kinds = new Set();
+      for (let i = 0; i < data.length; i += 5) kinds.add(LEGEND[data[i + 3]]);
+      console.log(`  ${data.length / 5} words classified: ${[...kinds].join(", ")}`);
+      if (!kinds.has("asn1Member") || !kinds.has("asn1Alternative")) {
+        console.log("FAIL: expected members and alternatives to be told apart");
+        process.exit(1);
+      }
+      console.log("\ndiagnostics, completion, checking as you type, related info," +
+                  " hover, jumps and semantic tokens");
       process.exit(0);
     }
   }

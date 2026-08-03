@@ -30,6 +30,7 @@ buildSync({
 });
 const {
   analyze, suggest, memberAt, declarationLine, assignmentLine, readableType,
+  classify,
 } = require(out);
 
 const schema = JSON.parse(execFileSync(EUICC, ["schema"], { maxBuffer: 8 << 20 }));
@@ -291,6 +292,58 @@ if (decl("PE-MF", "ef-imsi") === null) {
 if (decl("NoSuchType", "x") === null) {
   console.log("ok   an unknown type finds nothing"); pass++;
 } else { console.log("FAIL an unknown type finds nothing"); fail++; }
+
+/* ---- what each word is ---------------------------------------------------- */
+
+/*
+ * The grammar reads punctuation: a colon means alternative, a line start means
+ * member, and an identifier standing for a number matches nothing at all. Here
+ * the schema decides, so a word can be one thing in one place and another
+ * somewhere else -- which is the case below, and the one a regex cannot reach.
+ */
+const CLASSIFY = [
+  "value1 ProfileElement ::= pukCodes : {",
+  "    puk-Header { mandated NULL, identification 2 },",
+  "    pukCodes {",
+  "        { keyReference pukAppl1, pukValue '3131313131313131'H }",
+  "    }",
+  "}",
+].join("\n");
+{
+  const text = CLASSIFY;
+  const got = classify(schema, text).map((c) => [text.substr(c.offset, c.length), c.kind]);
+  const want = [
+    ["ProfileElement", "type"],
+    /* The same word twice: an alternative of ProfileElement, then a member of
+       PE-PUKCodes. Nothing in the text says which. */
+    ["pukCodes", "alternative"],
+    ["puk-Header", "member"],
+    ["mandated", "member"],
+    ["identification", "member"],
+    ["pukCodes", "member"],
+    ["keyReference", "member"],
+    /* A named number, which the grammar leaves colourless. */
+    ["pukAppl1", "value"],
+    ["pukValue", "member"],
+  ];
+  const same = JSON.stringify(got) === JSON.stringify(want);
+  if (same) { console.log(`ok   every word classified from the schema (${got.length})`); pass++; }
+  else {
+    console.log("FAIL classification differs");
+    console.log("     got  " + JSON.stringify(got));
+    console.log("     want " + JSON.stringify(want));
+    fail++;
+  }
+}
+
+/* A name the schema does not know is not reported at all: a semantic token can
+   add a colour and never remove one, so a typo cannot be marked this way. */
+{
+  const t = "value1 ProfileElement ::= header : {\n    nonsense 2\n}";
+  const got = classify(schema, t).filter((c) => t.substr(c.offset, c.length) === "nonsense");
+  if (got.length === 0) { console.log("ok   an unknown name is not classified"); pass++; }
+  else { console.log("FAIL an unknown name was classified"); fail++; }
+}
 
 /* ---- going to the schema -------------------------------------------------- */
 

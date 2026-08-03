@@ -231,6 +231,42 @@ function scopeAt(lines, text) {
         bad ? failed++ : ok++;
       }
     }
+    /*
+     * The semantic layer sits on top of this one and wins where it speaks. Our
+     * token types are pinned in package.json to the scopes the grammar already
+     * uses, so it settles what a word is without changing what it looks like.
+     * This is the gate that decided to ship it: mapping to the standard
+     * `property` instead would resolve through variable.other.property to the
+     * editor foreground under Dark 2026, putting 39 per cent of a profile in no
+     * colour at all.
+     */
+    const pinned = JSON.parse(
+      fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8")
+    ).contributes.semanticTokenScopes[0].scopes;
+    const SAME = [
+      ["asn1Member", "a member", "profileType"],
+      ["asn1Alternative", "an alternative", "header"],
+      ["asn1Type", "a type", "ProfileElement"],
+    ];
+    for (const [token, what, sample] of SAME) {
+      const semantic = c(["source.asn1-vn", ...pinned[token]]);
+      const grammar = at.get(what).col;
+      const d = apart(semantic, grammar);
+      const same = semantic === grammar;
+      console.log(`${same ? "ok  " : "FAIL"} ${token.padEnd(16)} ${semantic}` +
+        ` matches ${what} (${sample}) ${grammar}${same ? "" : `  ${d} apart`}`);
+      same ? ok++ : failed++;
+    }
+    /* asn1Value shares the alternative's scope on purpose: both are one of a
+       fixed set the schema knows, and they never share a position. */
+    {
+      const v = c(["source.asn1-vn", ...pinned.asn1Value]);
+      const a = c(["source.asn1-vn", ...pinned.asn1Alternative]);
+      const same = v === a;
+      console.log(`${same ? "ok  " : "FAIL"} asn1Value       ${v} shares the alternative colour`);
+      same ? ok++ : failed++;
+    }
+
     const groups = new Map();
     for (const [name, v] of at) {
       if (!groups.has(v.col)) groups.set(v.col, []);

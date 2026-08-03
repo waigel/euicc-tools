@@ -1,7 +1,7 @@
 {
   "name": "euicc-vn",
   "displayName": "eUICC profile packages",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "description": "Write eUICC profile packages in ASN.1 value notation, with the rules checked as you save.",
   "publisher": "waigel",
   "license": "MIT",
@@ -72,7 +72,48 @@
           "description": "Where the rule pages are. A finding's code links to its page there. Empty leaves the codes plain."
         }
       }
-    }
+    },
+    "semanticTokenTypes": [
+      {
+        "id": "asn1Member",
+        "superType": "property",
+        "description": "A member of a SEQUENCE or SET, named by the schema."
+      },
+      {
+        "id": "asn1Alternative",
+        "superType": "enumMember",
+        "description": "An alternative of a CHOICE, written `name : value`."
+      },
+      {
+        "id": "asn1Value",
+        "superType": "enumMember",
+        "description": "An identifier standing for a number or a bit, from the schema."
+      },
+      {
+        "id": "asn1Type",
+        "superType": "type",
+        "description": "A type reference."
+      }
+    ],
+    "semanticTokenScopes": [
+      {
+        "language": "asn1-vn",
+        "scopes": {
+          "asn1Member": [
+            "meta.object-literal.key.asn1"
+          ],
+          "asn1Alternative": [
+            "variable.other.enummember.asn1"
+          ],
+          "asn1Value": [
+            "variable.other.enummember.asn1"
+          ],
+          "asn1Type": [
+            "entity.name.class.asn1"
+          ]
+        }
+      }
+    ]
   },
   "scripts": {
     "compile": "tsc -p . --noEmit && node esbuild.mjs",

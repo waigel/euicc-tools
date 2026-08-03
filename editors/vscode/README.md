@@ -8,7 +8,7 @@ Interoperable Format*, version 3.4.1, which the industry calls SAIP.
 
 ## What it does
 
-- Highlights `.vn` and `.asn1vn` files.
+- Highlights `.vn` and `.asn1vn` files, and corrects the guesses from the schema.
 - Offers the members allowed at the cursor, with their types.
 - Shows a member's type and whether it may be left out, on hover.
 - Goes to the line of the ASN.1 that declares a name.
@@ -17,6 +17,22 @@ Interoperable Format*, version 3.4.1, which the industry calls SAIP.
 A profile package fails in two ways. The ASN.1 module states what a value may
 hold: a type, a size, a range. The specification states in prose what a package
 must look like: one header, and it comes first. Both appear as diagnostics.
+
+## Two layers of colour
+
+A TextMate grammar colours the file the moment it opens, before this extension's
+server has started. It reads punctuation: a colon means a CHOICE alternative, a
+line start means a member name. That is enough to read by and it guesses.
+
+The server then says what each word actually is, from the schema. `pukCodes` is
+an alternative of `ProfileElement` on one line and a member of `PE-PUKCodes` on
+another, and nothing in the text says which. An identifier standing for a
+number, `pukAppl1`, matches no grammar rule at all.
+
+The token types are pinned to the scopes the grammar already uses, so this
+settles what a word is without changing what it looks like. A name the schema
+does not know is not reported: a semantic token can add a colour and never
+remove one, so a typo is marked by the diagnostic and not by this.
 
 ## Completion
 
@@ -28,7 +44,7 @@ type descriptors. What is offered depends on where the cursor is:
 | After `::=` | The alternatives of `ProfileElement`, written `name : ` |
 | Inside a SEQUENCE | Its members, mandatory ones first, written `name ` |
 | Inside a CHOICE | Its alternatives, written `name : ` |
-| Inside a list | One element, wrapped in its own braces |
+| Inside a list of CHOICE | Its alternatives, written `name : `, with no braces of their own |
 | After a member name | The identifiers that member accepts, where it has any |
 
 A member already written is not offered again. `milenage` and the other named
