@@ -42,6 +42,7 @@ import {
   declarationLine,
   describe,
   memberAt,
+  readableType,
   Schema,
   suggest,
 } from "./schema";
@@ -355,7 +356,9 @@ function explain(
   while (offset < text.length && /\s/.test(text[offset])) offset++;
 
   const ctx = analyze(schema, text, offset);
-  if (!ctx.expect?.name || !ctx.type) return null;
+  /* ctx.owner, not ctx.type: inside a list of CHOICE the member belongs to
+     the element type and the list does not declare it. */
+  if (!ctx.expect?.name || !ctx.owner) return null;
 
   const wrote = LEXICAL.find(([re]) => re.test(text.slice(offset)))?.[1];
   if (!wrote) return null;
@@ -364,10 +367,10 @@ function explain(
     message: `Type '${wrote}' is not assignable to type '${ctx.expect.type}'.`,
     related: declaredAt(
       schema,
-      ctx.type,
+      ctx.owner,
       ctx.expect.name,
       `The expected type comes from property '${ctx.expect.name}' ` +
-        `which is declared here on type '${ctx.type}'`
+        `which is declared here on type '${readableType(ctx.owner)}'`
     ),
   };
 }

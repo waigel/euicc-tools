@@ -186,5 +186,25 @@ echo "$out" | grep -q '"line": 3' \
   && ok "a value of the wrong type names its line" \
   || bad "a value of the wrong type names its line ($out)"
 
+# SEQUENCE OF CHOICE. A CHOICE value is `alt : value` and carries no braces,
+# so an element of such a list is written straight inside it. An editor has to
+# know which of the two forms to insert, and this is where that is settled.
+mfhead='value1 ProfileElement ::= mf : {
+    mf-header { mandated NULL, identification 1 },
+    templateID { 2 23 143 1 2 1 },'
+printf '%s\n    mf { fileDescriptor : { securityAttributesReferenced %s2F0601%sH } }\n}\n' \
+  "$mfhead" "'" "'" > "$tmp/flat.vn"
+printf '%s\n    mf { { fileDescriptor : { securityAttributesReferenced %s2F0601%sH } } }\n}\n' \
+  "$mfhead" "'" "'" > "$tmp/nested.vn"
+
+# Both files lack other mandatory members, which is not what is under test:
+# only whether the braces themselves are refused.
+"$E" check -t --json "$tmp/flat.vn" 2>&1 | grep -q "expected an alternative name" \
+  && bad "an element of a list of CHOICE needs no braces" \
+  || ok "an element of a list of CHOICE needs no braces"
+"$E" check -t --json "$tmp/nested.vn" 2>&1 | grep -q "expected an alternative name" \
+  && ok "an element wrapped in braces is refused" \
+  || bad "an element wrapped in braces is refused"
+
 printf '\n%d ok, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

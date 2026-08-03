@@ -51,13 +51,34 @@ export interface Schema {
  * and nothing else -- which is why a search is enough and a second ASN.1
  * parser would be too much.
  */
+/*
+ * An inline type has no name in the ASN.1; `euicc schema` gives it the key the
+ * annotation table would use, Parent__member. A reader has never seen that.
+ *
+ *   File__Member                             File
+ *   ProfileHeader__eUICC-Mandatory-AIDs      ProfileHeader.eUICC-Mandatory-AIDs
+ *
+ * The first is the element type of a list, and its alternatives are written
+ * inside the assignment of File itself, so File is where they are declared and
+ * what a reader wrote.
+ */
+export function readableType(name: string): string {
+  const i = name.indexOf("__");
+  if (i < 0) return name;
+  const rest = name.slice(i + 2);
+  return rest === "Member" ? name.slice(0, i) : `${name.slice(0, i)}.${rest}`;
+}
+
 export function declarationLine(
   asn: string,
   type: string,
   member: string
 ): number | null {
   const lines = asn.split("\n");
-  const head = new RegExp(`^${type.replace(/[-[\]{}()*+?.\\^$|]/g, "\\$&")}\\s*::=`);
+  /* An inline type is declared inside the assignment of the type it sits in,
+     and only that assignment has a name to search for. */
+  const outer = type.split("__")[0];
+  const head = new RegExp(`^${outer.replace(/[-[\]{}()*+?.\\^$|]/g, "\\$&")}\\s*::=`);
   const field = new RegExp(`^\\s*${member.replace(/[-[\]{}()*+?.\\^$|]/g, "\\$&")}\\s`);
   let inside = false;
   for (let i = 0; i < lines.length; i++) {
@@ -92,9 +113,35 @@ interface Frame {
   labels: string[];
 }
 
+/*
+ * Where a member name goes at a point, and which type declares it.
+ *
+ * Usually the type the braces hold. Not for a list whose element is a CHOICE:
+ * a CHOICE value is written `alt : value` and carries no braces of its own, so
+ * `File ::= SEQUENCE OF CHOICE { … }` has its alternatives written straight
+ * inside the list, and euicc rejects an element wrapped in braces with
+ * "expected an alternative name for CHOICE". The names there belong to the
+ * element type, not to the list.
+ */
+export function nameScope(
+  schema: Schema,
+  typeName: string | null
+): { owner: string; type: SchemaType } | null {
+  const t = typeName ? schema.types[typeName] : undefined;
+  if (!t || !typeName) return null;
+  if ((t.kind === "SEQUENCE OF" || t.kind === "SET OF") && t.of) {
+    const el = schema.types[t.of];
+    if (el && (el.kind === "CHOICE" || el.kind === "OPEN TYPE"))
+      return { owner: t.of, type: el };
+  }
+  return { owner: typeName, type: t };
+}
+
 export interface Context {
   /* The type whose members the braces around the cursor hold. */
   type: string | null;
+  /* The type that declares `expect`, which is not always `type`. */
+  owner: string | null;
   path: string[];
   used: string[];
   /*
@@ -125,6 +172,8 @@ export function analyze(schema: Schema, text: string, offset: number): Context {
   const rootMember: Member = { name: "", type: schema.root, optional: false };
   let stack: Frame[] = [{ type: null, used: [], labels: [] }];
   let expect: Member | null = rootMember;
+  /* The type that declares `expect`; null while the root value is expected. */
+  let owner: string | null = null;
   let labels: string[] = [];
   const top = () => stack[stack.length - 1];
 
@@ -168,6 +217,7 @@ export function analyze(schema: Schema, text: string, offset: number): Context {
     if (c === ":" && text[i + 1] === ":" && text[i + 2] === "=") {
       stack = [{ type: null, used: [], labels: [] }];
       expect = rootMember;
+      owner = null;
       labels = [];
       i += 3;
       continue;
@@ -180,7 +230,11 @@ export function analyze(schema: Schema, text: string, offset: number): Context {
       if (expect) {
         next = expect.type;
       } else if (t && (t.kind === "SEQUENCE OF" || t.kind === "SET OF")) {
-        /* An element of a list carries no member name of its own. */
+        /*
+         * An element of a list carries no member name of its own. A CHOICE
+         * element does not reach here, because it has no braces either and
+         * nameScope resolved its alternative before this point.
+         */
         next = t.of ?? null;
       }
       stack.push({
@@ -222,16 +276,18 @@ export function analyze(schema: Schema, text: string, offset: number): Context {
        *                         standing for a number, and not a name
        */
       if (expect === null) {
-        const t = top().type ? schema.types[top().type!] : undefined;
-        const m = t?.members?.find((x) => x.name === word);
+        const sc = nameScope(schema, top().type);
+        const m = sc?.type.members?.find((x) => x.name === word);
         top().used.push(word);
         labels.push(word);
+        owner = sc?.owner ?? null;
         expect = m ?? { name: word, type: "", optional: false };
       } else if (schema.types[expect.type]?.kind === "CHOICE"
                  || schema.types[expect.type]?.kind === "OPEN TYPE") {
         const alt: Member | undefined =
           schema.types[expect.type].members?.find((x) => x.name === word);
         labels.push(word);
+        owner = expect.type;
         expect = alt ?? { name: word, type: "", optional: false };
       }
       i = j;
@@ -246,6 +302,7 @@ export function analyze(schema: Schema, text: string, offset: number): Context {
 
   return {
     type: top().type,
+    owner,
     path,
     used: top().used,
     expect,
@@ -274,16 +331,19 @@ export function memberAt(
   if (!word || !/^[a-z]/.test(word)) return null;
 
   const ctx = analyze(schema, text, start);
-  const owner = ctx.expect ? ctx.expect.type : ctx.type;
-  if (!owner) return null;
-  const member = schema.types[owner]?.members?.find((m) => m.name === word);
-  if (!member) return null;
-  return { member, owner, path: [...ctx.path, word] };
+  /* Past a name, the word is an alternative of what that name expects;
+     otherwise it names a member where a member name goes. */
+  const sc = ctx.expect
+    ? { owner: ctx.expect.type, type: schema.types[ctx.expect.type] }
+    : nameScope(schema, ctx.type);
+  const member = sc?.type?.members?.find((m) => m.name === word);
+  if (!member || !sc) return null;
+  return { member, owner: sc.owner, path: [...ctx.path, word] };
 }
 
 export function describe(m: Member, owner: string): string {
   const opt = m.optional ? "optional" : "mandatory";
-  let doc = `\`${owner}.${m.name}\`\n\n${m.type}, ${opt}.`;
+  let doc = `\`${readableType(owner)}.${m.name}\`\n\n${m.type}, ${opt}.`;
   if (m.names?.length) {
     doc += m.namedBits
       ? `\n\nNamed bits: ${m.names.join(", ")}.`
@@ -332,57 +392,52 @@ export function suggest(schema: Schema, ctx: Context): Suggestion[] {
     }));
   }
 
-  if (!ctx.type) return [];
-  const t = schema.types[ctx.type];
-  if (!t) return [];
+  const sc = nameScope(schema, ctx.type);
+  if (!sc) return [];
+  const t = sc.type;
 
   /*
-   * A list has no member names. Its elements are brace values, and where the
-   * element is a CHOICE the alternative is the useful thing to offer.
+   * A list whose element needs braces of its own. A list of CHOICE does not
+   * reach here: nameScope pointed at the element type, and its alternatives
+   * are offered below like any other member name.
    */
   if (t.kind === "SEQUENCE OF" || t.kind === "SET OF") {
-    const inner = t.of ? schema.types[t.of] : undefined;
-    if (inner?.kind === "CHOICE" && inner.members) {
-      return inner.members.map((m) => ({
-        label: m.name,
-        insert: `{ ${m.name} : $0 }`,
+    if (!t.of || !schema.types[t.of]) return [];
+    return [
+      {
+        label: "{ … }",
+        insert: "{ $0 }",
         snippet: true,
-        detail: `${m.type} — one element`,
-        doc: describe(m, t.of!),
-        sort: `0${m.name}`,
-      }));
-    }
-    if (inner?.members) {
-      return [
-        {
-          label: "{ … }",
-          insert: "{ $0 }",
-          snippet: true,
-          detail: `one ${t.of}`,
-          doc: `An element of \`${ctx.type}\`.`,
-          sort: "0",
-        },
-      ];
-    }
-    return [];
+        detail: `one ${t.of}`,
+        doc: `An element of \`${ctx.type}\`.`,
+        sort: "0",
+      },
+    ];
   }
 
   if (!t.members) return [];
 
   const choice = t.kind === "CHOICE" || t.kind === "OPEN TYPE";
+  /*
+   * nameScope pointed somewhere else, so these braces are a list and each
+   * alternative is one element of it. A file is filled in pieces, so
+   * fillFileContent belongs in the list as often as the content needs.
+   */
+  const repeats = sc.owner !== ctx.type;
   return (
     t.members
       /*
-       * A CHOICE holds exactly one alternative, so once one is written there
-       * is nothing more to offer; a SEQUENCE holds each member once.
+       * A CHOICE holds exactly one alternative and a SEQUENCE each member
+       * once, so what is written is not offered again. A list is the
+       * exception: writing an element does not use anything up.
        */
-      .filter((m) => !ctx.used.includes(m.name))
+      .filter((m) => repeats || !ctx.used.includes(m.name))
       .map((m) => ({
         label: m.name,
         /* X.680 29.2: an alternative of a CHOICE is written `name : value`. */
         insert: choice ? `${m.name} : ` : `${m.name} `,
         detail: m.optional ? `${m.type} (optional)` : m.type,
-        doc: describe(m, ctx.type!),
+        doc: describe(m, sc.owner),
         sort: `${m.optional ? 1 : 0}${m.name}`,
       }))
   );

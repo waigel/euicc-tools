@@ -28,7 +28,7 @@ buildSync({
   platform: "node",
   format: "cjs",
 });
-const { analyze, suggest, memberAt, declarationLine } = require(out);
+const { analyze, suggest, memberAt, declarationLine, readableType } = require(out);
 
 const schema = JSON.parse(execFileSync(EUICC, ["schema"], { maxBuffer: 8 << 20 }));
 
@@ -53,7 +53,7 @@ function check(what, sample, verdict) {
     pass++;
   } else {
     console.log(`FAIL ${what}\n       ${why}`);
-    console.log(`       type=${ctx.type} valueFor=${ctx.valueFor} used=[${ctx.used}]`);
+    console.log(`       type=${ctx.type} owner=${ctx.owner} expect=${JSON.stringify(ctx.expect)}`);
     console.log(`       got: ${labels.slice(0, 12).join(", ")}${labels.length > 12 ? " …" : ""}`);
     fail++;
   }
@@ -133,19 +133,32 @@ check("an element of File offers the alternatives of its CHOICE",
   has(l, "doNotCreate", "fileDescriptor", "fillFileOffset", "fillFileContent")
 );
 
-check("an element of a list is wrapped in its own braces",
+/*
+ * An element of a list of CHOICE gets no braces of its own. A CHOICE value is
+ * `alt : value` and carries none, so `File ::= SEQUENCE OF CHOICE { … }` has
+ * its alternatives written straight inside the list. euicc rejects the other
+ * form with "expected an alternative name for CHOICE", and an earlier version
+ * of this test asserted that other form, so the completion inserted text the
+ * build would not take.
+ */
+check("an element of a list of CHOICE has no braces of its own",
   "value1 ProfileElement ::= mf : {\n    mf {\n        |", (l, i) => {
   const f = i.find((x) => x.label === "fileDescriptor");
-  return f.snippet && f.insert === "{ fileDescriptor : $0 }"
-    ? true : `insert was ${JSON.stringify(f.insert)}`;
+  return f && !f.snippet && f.insert === "fileDescriptor : "
+    ? true : `insert was ${JSON.stringify(f && f.insert)}`;
 });
 
-check("inside an element the CHOICE alternative is offered plainly",
-  "value1 ProfileElement ::= mf : {\n    mf {\n        { |", (l, i) => {
-  const f = i.find((x) => x.label === "fileDescriptor");
-  return f && f.insert === "fileDescriptor : " ? true
-    : `insert was ${JSON.stringify(f && f.insert)}`;
-});
+check("an alternative may be written again, because a list repeats",
+  "value1 ProfileElement ::= mf : {\n    mf {\n" +
+  "        fillFileContent '3F00'H,\n        |", (l) =>
+  has(l, "fillFileContent")
+);
+
+check("the type expected in a list of CHOICE resolves",
+  "value1 ProfileElement ::= mf : {\n    mf {\n        fillFileContent |", (l, i, ctx) =>
+  ctx.expect && ctx.expect.type === "OCTET STRING" && ctx.owner === "File__Member"
+    ? true : `expect=${JSON.stringify(ctx.expect)} owner=${ctx.owner}`
+);
 
 /* ---- the scanner ---------------------------------------------------------- */
 
@@ -238,10 +251,31 @@ checkHover("a word that names nothing gives nothing",
   "value1 ProfileElement ::= header : {\n    nonsen|se 1\n}", (f) =>
   f === null ? true : "should not invent a member");
 
+/* An inline type has no name in the ASN.1, so the key euicc gives it is
+   turned into something a reader has seen. */
+for (const [from, want] of [
+  ["File__Member", "File"],
+  ["ProfileHeader__eUICC-Mandatory-AIDs", "ProfileHeader.eUICC-Mandatory-AIDs"],
+  ["ProfileHeader", "ProfileHeader"],
+]) {
+  if (readableType(from) === want) { console.log(`ok   ${from} reads as ${want}`); pass++; }
+  else { console.log(`FAIL ${from} read as ${readableType(from)}, not ${want}`); fail++; }
+}
+
 /* ---- the declaration a finding points at ---------------------------------- */
 
 const asn = require("node:fs").readFileSync(schema.source, "utf8");
 const decl = (t, m) => declarationLine(asn, t, m);
+/* An alternative of an inline CHOICE is declared inside the assignment of the
+   type that holds it, which is the only name there is to search for. */
+if (decl("File__Member", "fillFileContent") !== null) {
+  console.log("ok   an inline CHOICE alternative is found through its outer type");
+  pass++;
+} else {
+  console.log("FAIL an inline CHOICE alternative is found through its outer type");
+  fail++;
+}
+
 const line = decl("PE-MF", "ef-iccid");
 if (line !== null && /^\s*ef-iccid\s/.test(asn.split("\n")[line])) {
   console.log(`ok   the declaration of PE-MF.ef-iccid is found (line ${line + 1})`);
