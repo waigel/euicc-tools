@@ -66,6 +66,7 @@ interface Settings {
   rules: string;
   checkOn: "save" | "type";
   checkDelay: number;
+  docs: string;
 }
 
 const DEFAULTS: Settings = {
@@ -73,7 +74,28 @@ const DEFAULTS: Settings = {
   rules: "",
   checkOn: "type",
   checkDelay: 300,
+  docs: "https://euicc.waigel.com",
 };
+
+/*
+ * A rule identifier, SAIP-HDR-02, which the documentation gives a page of its
+ * own: what the rule requires, the clause it comes from, and the .sch that
+ * states it. The editor shows the code of a finding as a link when the
+ * diagnostic carries one.
+ *
+ * TypeScript does not do this. Its diagnostics carry a number and no target,
+ * because a compiler error is about the code in front of you. A rule here is
+ * about a specification you may not have open, so the citation is worth a
+ * click. Set euicc.docs to "" to leave the codes plain.
+ */
+const RULE_ID = /^[A-Z]+(-[A-Z0-9]+)+$/;
+
+function ruleDocs(code: string): { href: string } | undefined {
+  if (!settings.docs || !RULE_ID.test(code)) return undefined;
+  return {
+    href: `${settings.docs.replace(/\/$/, "")}/rules/${code.toLowerCase()}/`,
+  };
+}
 
 const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);
@@ -217,6 +239,7 @@ async function check(doc: TextDocument): Promise<void> {
         end: { line, character: Math.max(character + 1, lineText.trimEnd().length) },
       },
       code: f.code,
+      codeDescription: ruleDocs(f.code),
       source: f.source ? `euicc (${f.source})` : "euicc",
       message: f.message,
     };

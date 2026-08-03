@@ -1,7 +1,7 @@
 {
   "name": "euicc-vn",
   "displayName": "eUICC profile packages",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Write eUICC profile packages in ASN.1 value notation, with the rules checked as you save.",
   "publisher": "waigel",
   "license": "MIT",
@@ -65,6 +65,11 @@
           "default": 300,
           "minimum": 0,
           "description": "Milliseconds of quiet before checking as you type. A check of a 3000 line profile takes about 150 ms."
+        },
+        "euicc.docs": {
+          "type": "string",
+          "default": "https://euicc.waigel.com",
+          "description": "Where the rule pages are. A finding's code links to its page there. Empty leaves the codes plain."
         }
       }
     }

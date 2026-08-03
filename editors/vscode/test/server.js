@@ -78,6 +78,17 @@ srv.stdout.on("data", (d) => {
       console.log(`  ${d.length} diagnostics, both ordering rules reported`);
 
       /*
+       * A rule has a page of its own, and the editor shows the code as a link
+       * when the diagnostic carries a target. TypeScript's carry none.
+       */
+      const cd = d[0].codeDescription;
+      if (!cd || cd.href !== "https://euicc.waigel.com/rules/saip-hdr-02/") {
+        console.log(`FAIL: no link on the rule code (${JSON.stringify(cd)})`);
+        process.exit(1);
+      }
+      console.log(`  ${d[0].code} links to ${cd.href}`);
+
+      /*
        * Line 2 column 2 is where major-version begins, inside the header. The
        * suggester has tests of its own; this one asks over the protocol,
        * because a suggester nothing calls is worth nothing.
@@ -149,6 +160,11 @@ srv.stdout.on("data", (d) => {
       const d = msg.params.diagnostics;
       if (!d.length) return;
       console.log(`  ${d[0].message}`);
+      /* A parse failure is not a rule and has no page. */
+      if (d[0].codeDescription) {
+        console.log("FAIL: a parse finding was given a rule link");
+        process.exit(1);
+      }
       if (d[0].message !== "Type 'hstring' is not assignable to type 'UTF8String'.") {
         console.log("FAIL: the type mismatch was not put in TypeScript's words");
         process.exit(1);

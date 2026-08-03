@@ -55,6 +55,7 @@ If `euicc` is somewhere else, set `euicc.path`.
 | `euicc.rules` | The rule set. Empty uses the one compiled into `euicc`. |
 | `euicc.checkOn` | `type` to check as you write, `save` to wait for a save. |
 | `euicc.checkDelay` | Milliseconds of quiet before a check while typing. |
+| `euicc.docs` | Where the rule pages are. Empty leaves the codes plain. |
 
 ## What it does not do
 
@@ -78,6 +79,12 @@ words, taken from the compiler that ships inside VS Code:
     Type 'hstring' is not assignable to type 'UTF8String'.
       profile-3.4.1.asn(76): The expected type comes from property
       'profileType' which is declared here on type 'ProfileHeader'
+
+A rule failure carries a link on its code, to the page for that rule: what it
+requires, the clause it comes from, and the `.sch` that states it. TypeScript
+does not link its diagnostics, and does not need to -- a compiler error is
+about the code in front of you. A rule here is about a specification you may
+not have open.
 
 `euicc` decides what is wrong; this only says it with what the schema adds.
 Where the member cannot be worked out, the finding is shown as `euicc` gave
