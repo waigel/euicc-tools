@@ -221,7 +221,14 @@ export function layout(text: string, unit = "    "): string {
 
   const flush = () => {
     const body = line.trim();
-    if (verbatim) out.push(line.replace(/\s+$/, ""));
+    /*
+     * A continuation line of a comment or a literal is the author's, so it goes
+     * out as written -- and inside a cstring not even the trailing whitespace
+     * may go, because every character of one counts. Stripping it shortened the
+     * string and the token check could not see it, which is the whole reason
+     * that check exists.
+     */
+    if (verbatim) out.push(inQuote === '"' ? line : line.replace(/\s+$/, ""));
     else out.push(body ? unit.repeat(Math.max(0, pending)) + body : "");
     line = "";
     verbatim = inBlock || inQuote !== null;
@@ -231,7 +238,18 @@ export function layout(text: string, unit = "    "): string {
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
 
-    if (c === "\n") { flush(); continue; }
+    /*
+     * A cstring may run over lines and every character of one counts, so the
+     * whole literal stays in one accumulated line and goes out as written. The
+     * newline is handled before the quote state below, which is why the guard
+     * has to be here: flushing at it trimmed the trailing whitespace off the
+     * first line of the string.
+     */
+    if (c === "\n") {
+      if (inQuote === '"') { line += c; continue; }
+      flush();
+      continue;
+    }
 
     if (inBlock) {
       line += c;
@@ -331,10 +349,19 @@ export function tokens(text: string): string[] {
     if (c === '"' || c === "'") {
       const end = text.indexOf(c, i + 1);
       const j = end < 0 ? text.length : end + 1;
-      /* An hstring may be wrapped over lines and the whitespace inside one is
-         not part of the value: X.680 12.12. */
-      out.push(text.slice(i, j).replace(/\s+/g, "") + (text[j] ?? ""));
-      i = /[HhBb]/.test(text[j] ?? "") ? j : j - 1;
+      const body = text.slice(i, j);
+      if (c === "'") {
+        /* X.680 12.11 and 12.12: the whitespace inside an hstring or a bstring
+           is not part of the value, so wrapping one over lines is free. */
+        out.push(body.replace(/\s+/g, "") + (text[j] ?? ""));
+        i = /[HhBb]/.test(text[j] ?? "") ? j : j - 1;
+      } else {
+        /* A cstring is text. Every character in it counts, and comparing it
+           with the whitespace stripped made this check blind to a formatter
+           that shortened one. */
+        out.push(body);
+        i = j - 1;
+      }
       continue;
     }
     if (WORD.test(c)) {

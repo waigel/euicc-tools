@@ -346,6 +346,32 @@ const same = (a, b) => tokens(a).join("\u0000") === tokens(b).join("\u0000");
 }
 
 /*
+ * A cstring is text and every character of one counts. X.680 12.11 and 12.12
+ * say the whitespace inside an hstring or a bstring is not part of the value,
+ * and an earlier version of tokens() applied that to a cstring as well -- so
+ * the check went blind at exactly the place layout() was shortening one.
+ */
+{
+  const src = [
+    "value1 ProfileElement ::= header : {",
+    '    profileType "first line   ',
+    'second line",',
+    "    major-version 2",
+    "}",
+  ].join("\n") + "\n";
+  const got = layout(src);
+  const inner = (t) => /"([\s\S]*?)"/.exec(t)[1];
+  for (const [what, okd] of [
+    ["a cstring over lines is not touched", inner(src) === inner(got)],
+    ["and its tokens compare equal", same(src, got)],
+    ["laying out twice is the same as once", layout(got) === got],
+  ]) {
+    console.log(`${okd ? "ok  " : "FAIL"} ${what}`);
+    okd ? pass++ : fail++;
+  }
+}
+
+/*
  * The writer's own output must come back unchanged, or the two disagree about
  * what canonical means. Two things it settled: an hstring wrapped over lines is
  * left as the writer laid it out, and an OBJECT IDENTIFIER stays on one line,
