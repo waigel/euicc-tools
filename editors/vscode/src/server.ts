@@ -31,10 +31,13 @@ import {
   InitializeParams,
   InsertTextFormat,
   MarkupKind,
+  CodeAction,
+  CodeActionKind,
   ProposedFeatures,
   SemanticTokensBuilder,
   TextDocuments,
   TextDocumentSyncKind,
+  TextEdit,
 } from "vscode-languageserver/node";
 import { TextDocument } from "vscode-languageserver-textdocument";
 
@@ -44,6 +47,7 @@ import {
   classify,
   declarationLine,
   describe,
+  indentation,
   memberAt,
   readableType,
   Schema,
@@ -150,6 +154,8 @@ connection.onInitialize((_params: InitializeParams) => ({
     definitionProvider: true,
     typeDefinitionProvider: true,
     semanticTokensProvider: { legend: LEGEND, full: true },
+    codeActionProvider: { codeActionKinds: [CodeActionKind.QuickFix] },
+    documentFormattingProvider: true,
   },
 }));
 
@@ -283,6 +289,7 @@ async function check(doc: TextDocument): Promise<void> {
     if (extra) {
       d.message = extra.message;
       if (extra.related) d.relatedInformation = [extra.related];
+      if (extra.fix) d.data = extra.fix;
     }
     return d;
   });
@@ -324,6 +331,8 @@ const LEXICAL: Array<[RegExp, string]> = [
 interface Explained {
   message: string;
   related?: DiagnosticRelatedInformation;
+  /* An edit the editor can offer, at the start of the diagnostic's range. */
+  fix?: { title: string; insert: string };
 }
 
 /* A place in the ASN.1, for the second line of a TypeScript-shaped error. */
@@ -366,6 +375,37 @@ function explain(
     return {
       message: `Property '${name}' is missing in type '${type}'.`,
       related: declaredAt(schema, type, name, `'${name}' is declared here.`),
+    };
+  }
+
+  /*
+   * A CHOICE alternative is written `name : value` and this one has no colon.
+   * The reader stops exactly where the colon belongs, so the name is the word
+   * before that point and the fix is an insertion at it.
+   */
+  if (finding.message === "expected : after the alternative name") {
+    const text = doc.getText();
+    const at = doc.offsetAt({
+      line: Math.max(0, finding.line - 1),
+      character: Math.max(0, finding.column - 1),
+    });
+    const found = at > 0 ? memberAt(schema, text, at - 1) : null;
+    if (!found) return null;
+    return {
+      message: `':' expected after the alternative '${found.member.name}'.`,
+      related: declaredAt(
+        schema,
+        found.owner,
+        found.member.name,
+        `'${found.member.name}' is an alternative of ` +
+          `'${readableType(found.owner)}', declared here`
+      ),
+      /* Whitespace already there takes the colon on its own; without any, the
+         insertion has to bring both spaces. */
+      fix: {
+        title: "Add missing ':'",
+        insert: /\s/.test(text[at] ?? "") ? " :" : " : ",
+      },
     };
   }
 
@@ -550,6 +590,69 @@ connection.onHover(async (params) => {
   if (path.length > 1) lines.push(`\nIn \`${path.join(" / ")}\`.`);
 
   return { contents: { kind: MarkupKind.Markdown, value: lines.join("\n") } };
+});
+
+/* ---- laying it out ----------------------------------------------------------- */
+
+/*
+ * One edit per line whose indentation is wrong, and nothing else. See
+ * indentation() for why this does not go through `euicc show`.
+ */
+connection.onDocumentFormatting((params): TextEdit[] => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc || doc.languageId !== "asn1-vn") return [];
+
+  const unit = params.options.insertSpaces
+    ? " ".repeat(Math.max(1, params.options.tabSize))
+    : "\t";
+  const lines = doc.getText().split("\n");
+  const want = indentation(doc.getText());
+  const edits: TextEdit[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const level = want[i];
+    if (level === null) continue;
+    const line = lines[i];
+    if (!line.trim()) continue;
+    const had = line.length - line.trimStart().length;
+    const should = unit.repeat(level);
+    if (line.slice(0, had) === should) continue;
+    edits.push({
+      range: { start: { line: i, character: 0 }, end: { line: i, character: had } },
+      newText: should,
+    });
+  }
+  return edits;
+});
+
+/* ---- fixing it --------------------------------------------------------------- */
+
+/*
+ * The edit a finding already knows about. TypeScript registers each of its
+ * seventy-odd fixes against the error codes it repairs; the same idea with one
+ * fix, carried on the diagnostic itself rather than worked out again from its
+ * text.
+ */
+connection.onCodeAction((params): CodeAction[] => {
+  const out: CodeAction[] = [];
+  for (const d of params.context.diagnostics) {
+    const fix = d.data as { title?: string; insert?: string } | undefined;
+    if (!fix?.title || fix.insert === undefined) continue;
+    out.push({
+      title: fix.title,
+      kind: CodeActionKind.QuickFix,
+      diagnostics: [d],
+      isPreferred: true,
+      edit: {
+        changes: {
+          [params.textDocument.uri]: [
+            { range: { start: d.range.start, end: d.range.start }, newText: fix.insert },
+          ],
+        },
+      },
+    });
+  }
+  return out;
 });
 
 /* ---- what each word is ------------------------------------------------------ */

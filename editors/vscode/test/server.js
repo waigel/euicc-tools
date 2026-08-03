@@ -74,13 +74,14 @@ srv.stdout.on("data", (d) => {
       }
       for (const cap of ["completionProvider", "hoverProvider",
                          "definitionProvider", "typeDefinitionProvider",
-                         "semanticTokensProvider"]) {
+                         "semanticTokensProvider", "codeActionProvider",
+                         "documentFormattingProvider"]) {
         if (!msg.result.capabilities[cap]) {
           console.log(`FAIL: the server does not declare ${cap}`);
           process.exit(1);
         }
       }
-      console.log("  completion, hover, both jumps and semantic tokens are declared");
+      console.log("  completion, hover, jumps, tokens, fixes and formatting are declared");
       LEGEND = msg.result.capabilities.semanticTokensProvider.legend.tokenTypes;
     }
 
@@ -229,10 +230,25 @@ srv.stdout.on("data", (d) => {
       const d = msg.params.diagnostics;
       if (!d.length) return;
       console.log(`  ${d[0].message}`);
-      if (d[0].message !== "expected : after the alternative name") {
+      /*
+       * It is punctuation, not a type. Restating it as one produced "Type
+       * 'hstring' is not assignable to type 'OCTET STRING'", false twice over.
+       * It may name the alternative, because the schema knows which, and it
+       * must carry the edit that repairs it.
+       */
+      if (/not assignable/.test(d[0].message)) {
         console.log("FAIL: a punctuation failure was restated as a type error");
         process.exit(1);
       }
+      if (d[0].message !== "':' expected after the alternative 'fillFileContent'.") {
+        console.log("FAIL: the alternative was not named");
+        process.exit(1);
+      }
+      if (!d[0].data || d[0].data.insert !== " :") {
+        console.log(`FAIL: no colon to insert (${JSON.stringify(d[0].data)})`);
+        process.exit(1);
+      }
+      console.log(`  fix available: ${d[0].data.title}, inserting ${JSON.stringify(d[0].data.insert)}`);
 
       /* And into the schema, which is where the answer to all of it lives. */
       jumped = true;
@@ -267,8 +283,25 @@ srv.stdout.on("data", (d) => {
         console.log("FAIL: expected members and alternatives to be told apart");
         process.exit(1);
       }
+      send({ jsonrpc: "2.0", id: 6, method: "textDocument/formatting", params: {
+        textDocument: { uri: "file:///tmp/x.vn" },
+        options: { tabSize: 4, insertSpaces: true } } });
+    }
+
+    if (msg.id === 6) {
+      const edits = msg.result || [];
+      /* Every edit replaces only the run of whitespace at the start of a line. */
+      const bad = edits.filter((e) =>
+        e.range.start.line !== e.range.end.line ||
+        e.range.start.character !== 0 ||
+        /\S/.test(e.newText));
+      if (bad.length) {
+        console.log(`FAIL: formatting edited more than indentation: ${JSON.stringify(bad[0])}`);
+        process.exit(1);
+      }
+      console.log(`  formatting offered ${edits.length} indentation edits and nothing else`);
       console.log("\ndiagnostics, completion, checking as you type, related info," +
-                  " hover, jumps and semantic tokens");
+                  " hover, jumps, tokens, a fix and formatting");
       process.exit(0);
     }
   }

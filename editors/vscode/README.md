@@ -12,7 +12,9 @@ Interoperable Format*, version 3.4.1, which the industry calls SAIP.
 - Offers the members allowed at the cursor, with their types.
 - Shows a member's type and whether it may be left out, on hover.
 - Goes to the line of the ASN.1 that declares a name.
-- Reports the errors that `euicc check` reports, as you write them.
+- Reports the errors that `euicc check` reports, as you write them, and offers
+  the edit where it knows one.
+- Lays out the indentation, and nothing else.
 
 A profile package fails in two ways. The ASN.1 module states what a value may
 hold: a type, a size, a range. The specification states in prose what a package
@@ -129,6 +131,18 @@ where it differs from TypeScript, whose server type-checks the file as you
 type. Value notation needs no such machinery, because it has no inference, no
 imports and no generics. The type at a point follows from the path of member
 names and from nothing else.
+
+## Formatting
+
+Indentation only. `euicc show` writes canonical value notation and looks like a
+formatter until you notice it re-serialises a decoded value: every comment is
+gone and `myHeader ProfileElement ::=` comes back as `value1`. Format on save
+would delete documentation without a word.
+
+So the only edit is the whitespace at the start of a line, which cannot lose
+anything, and the tests check that rather than assume it. The writer's own
+output comes back unchanged, and a long hex string wrapped over lines is left
+as it was laid out -- X.680 12.12 ignores the whitespace inside one.
 
 ## Licence
 

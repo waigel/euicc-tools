@@ -30,7 +30,7 @@ buildSync({
 });
 const {
   analyze, suggest, memberAt, declarationLine, assignmentLine, readableType,
-  classify,
+  classify, indentation,
 } = require(out);
 
 const schema = JSON.parse(execFileSync(EUICC, ["schema"], { maxBuffer: 8 << 20 }));
@@ -292,6 +292,84 @@ if (decl("PE-MF", "ef-imsi") === null) {
 if (decl("NoSuchType", "x") === null) {
   console.log("ok   an unknown type finds nothing"); pass++;
 } else { console.log("FAIL an unknown type finds nothing"); fail++; }
+
+/* ---- laying it out -------------------------------------------------------- */
+
+/*
+ * Indentation and nothing else. `euicc show` writes canonical value notation
+ * and looks like a formatter until you notice it re-serialises a decoded
+ * value: every comment is gone and `myHeader ProfileElement ::=` comes back
+ * `value1`. Format on save would delete documentation without a word, so the
+ * only edit is the whitespace at the start of a line -- and that is checked
+ * here rather than assumed.
+ */
+const reindent = (text) => {
+  const lines = text.split("\n");
+  const want = indentation(text);
+  return lines
+    .map((l, i) => (want[i] === null || !l.trim() ? l : "    ".repeat(want[i]) + l.trimStart()))
+    .join("\n");
+};
+const bare = (t) => t.split("\n").map((l) => l.trimStart()).join("\n");
+
+{
+  const messy = [
+    "-- a header comment",
+    "myHeader ProfileElement ::= header : {",
+    "major-version 2,     -- keeps its place",
+    "        minor-version 3,",
+    "  eUICC-Mandatory-services { usim NULL },",
+    "/* a block",
+    "     comment laid out by hand */",
+    "  eUICC-Mandatory-GFSTEList {",
+    "{ 2 23 143 1 2 1 }",
+    "}",
+    "}",
+  ].join("\n");
+  const got = reindent(messy);
+  const checks = [
+    ["nothing but leading whitespace changes", bare(messy) === bare(got)],
+    ["every comment survives",
+      (got.match(/--|\/\*/g) || []).length === (messy.match(/--|\/\*/g) || []).length],
+    ["the value reference keeps its name", got.includes("myHeader")],
+    ["a block comment keeps the layout it was given",
+      got.includes("     comment laid out by hand */")],
+    ["a nested brace is indented", got.includes("        { 2 23 143 1 2 1 }")],
+  ];
+  for (const [what, okd] of checks) {
+    console.log(`${okd ? "ok  " : "FAIL"} ${what}`);
+    okd ? pass++ : fail++;
+  }
+}
+
+/*
+ * The writer's own output must come back unchanged, or the two disagree about
+ * what canonical means. It did: an hstring wrapped over lines is left as the
+ * writer laid it out, and without tracking a quote across lines the closing
+ * one read as an opening one and the braces after it were lost.
+ */
+{
+  /* Written by euicc here rather than found somewhere: the point is that this
+     is the writer's own output, so the test has to ask the writer for it. */
+  const der = path.join(__dirname, "..", "..", "..", "vendor", "euicc-profile-tool",
+    "testdata", "TS48 V7.0 eSIM_GTP_SAIP2.3_NoBERTLV.der");
+  const real = fs.existsSync(der)
+    ? execFileSync(EUICC, ["show", der], { maxBuffer: 8 << 20 }).toString()
+    : null;
+  if (real === null) {
+    console.log("skip  no published profile here, so the writer was not compared");
+  } else {
+  const once = reindent(real);
+  const checks = [
+    ["the writer's output is already laid out", real === once],
+    ["laying out twice is the same as once", reindent(once) === once],
+  ];
+  for (const [what, okd] of checks) {
+    console.log(`${okd ? "ok  " : "FAIL"} ${what}`);
+    okd ? pass++ : fail++;
+  }
+  }
+}
 
 /* ---- what each word is ---------------------------------------------------- */
 
