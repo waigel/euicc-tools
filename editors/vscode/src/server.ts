@@ -220,7 +220,7 @@ async function check(doc: TextDocument): Promise<void> {
       source: f.source ? `euicc (${f.source})` : "euicc",
       message: f.message,
     };
-    const extra = schema ? explain(schema, f.message) : null;
+    const extra = schema ? explain(schema, f, doc) : null;
     if (extra) {
       d.message = extra.message;
       if (extra.related) d.relatedInformation = [extra.related];
@@ -234,53 +234,118 @@ async function check(doc: TextDocument): Promise<void> {
 /* ---- what a finding leaves out --------------------------------------------- */
 
 /*
- * The reader names the type and the member it wanted and stops there, because
- * that is all it knows. The schema knows the member's type and the ASN.1 file
- * says where it is declared, and TypeScript reports both:
+ * The reader says what it wanted and stops, because that is all it has: the
+ * descriptor it is walking, and no schema in front of it. The schema knows the
+ * member's declared type, and the ASN.1 file says which line declares it.
  *
- *     Property 'test' is missing in type '{}' but required in type 'Thing'.
- *     thing.ts(2, 5): 'test' is declared here.
+ * The wording is TypeScript's, read out of the compiler that ships inside VS
+ * Code rather than written to look like it:
  *
- * The second line is a separate location, which LSP carries as related
- * information. Adding it costs a text search of the schema source; if the
- * file is not there or the search misses, the finding is passed through as it
- * came and nothing is lost.
+ *     Type '{0}' is not assignable to type '{1}'.
+ *     Property '{0}' is missing in type '{1}'.
+ *     '{0}' is declared here.
+ *     The expected type comes from property '{0}' which is declared here on
+ *     type '{1}'
+ *
+ * Nothing here decides that a file is wrong; euicc has already decided. This
+ * only restates the same finding with what the schema adds, and where it
+ * cannot work the member out, the finding passes through as it came.
  */
-function explain(
+
+/* X.680 clause 12: what was written, named by its lexical item. */
+const LEXICAL: Array<[RegExp, string]> = [
+  [/^'[0-9A-Fa-f\s]*'[Hh]/, "hstring"],
+  [/^'[01\s]*'[Bb]/, "bstring"],
+  [/^"/, "cstring"],
+  [/^-?\d/, "number"],
+  [/^\{/, "{ … }"],
+  [/^[A-Za-z]/, "identifier"],
+];
+
+interface Explained {
+  message: string;
+  related?: DiagnosticRelatedInformation;
+}
+
+/* A place in the ASN.1, for the second line of a TypeScript-shaped error. */
+function declaredAt(
   schema: Schema,
+  type: string,
+  name: string,
   message: string
-): { message: string; related?: DiagnosticRelatedInformation } | null {
-  const m = /^(\S+) is missing mandatory member '([^']+)'/.exec(message);
-  if (!m) return null;
-  const [, type, name] = m;
-
-  const member = schema.types[type]?.members?.find((x) => x.name === name);
-  if (!member) return null;
-
-  const out = `${type} is missing mandatory member '${name}', of type ${member.type}`;
-  if (!schema.source) return { message: out };
-
+): DiagnosticRelatedInformation | undefined {
+  if (!schema.source) return undefined;
   let asn: string;
   try {
     asn = readFileSync(schema.source, "utf8");
   } catch {
-    return { message: out };
+    return undefined;
   }
   const line = declarationLine(asn, type, name);
-  if (line === null) return { message: out };
+  if (line === null) return undefined;
+  return {
+    location: {
+      uri: pathToFileURL(schema.source).toString(),
+      range: {
+        start: { line, character: 0 },
+        end: { line, character: asn.split("\n")[line].length },
+      },
+    },
+    message,
+  };
+}
+
+function explain(
+  schema: Schema,
+  finding: Finding,
+  doc: TextDocument
+): Explained | null {
+  const missing = /^(\S+) is missing mandatory member '([^']+)'/.exec(finding.message);
+  if (missing) {
+    const [, type, name] = missing;
+    if (!schema.types[type]?.members?.some((x) => x.name === name)) return null;
+    return {
+      message: `Property '${name}' is missing in type '${type}'.`,
+      related: declaredAt(schema, type, name, `'${name}' is declared here.`),
+    };
+  }
+
+  /*
+   * Everything the reader phrases as an expectation: a string where a hex
+   * string belongs, a number where a brace list does. It names the shape it
+   * wanted, and the schema names the member that wanted it.
+   */
+  if (!/^expected /.test(finding.message)) return null;
+
+  const text = doc.getText();
+  let offset = doc.offsetAt({
+    line: Math.max(0, finding.line - 1),
+    character: Math.max(0, finding.column - 1),
+  });
+  /*
+   * The reader stops where the value should have begun, which is the space
+   * after the member name and not the token itself. Two things go wrong from
+   * a space: no lexical item matches one, and the scan runs backwards over
+   * the member name and takes it for a word half typed, so it finds nothing
+   * expected at all.
+   */
+  while (offset < text.length && /\s/.test(text[offset])) offset++;
+
+  const ctx = analyze(schema, text, offset);
+  if (!ctx.expect?.name || !ctx.type) return null;
+
+  const wrote = LEXICAL.find(([re]) => re.test(text.slice(offset)))?.[1];
+  if (!wrote) return null;
 
   return {
-    message: out,
-    related: {
-      location: {
-        uri: pathToFileURL(schema.source).toString(),
-        range: {
-          start: { line, character: 0 },
-          end: { line, character: asn.split("\n")[line].length },
-        },
-      },
-      message: `'${name}' is declared here`,
-    },
+    message: `Type '${wrote}' is not assignable to type '${ctx.expect.type}'.`,
+    related: declaredAt(
+      schema,
+      ctx.type,
+      ctx.expect.name,
+      `The expected type comes from property '${ctx.expect.name}' ` +
+        `which is declared here on type '${ctx.type}'`
+    ),
   };
 }
 

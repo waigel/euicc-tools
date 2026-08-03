@@ -23,7 +23,15 @@ const send = (msg) => {
 let buf = Buffer.alloc(0);
 let asked = false;
 let edited = false;
+let typed = false;
 let hovered = false;
+
+/* A hex string where the header wants text. */
+const WRONGTYPE =
+  "value1 ProfileElement ::= header : {\n  major-version 2, minor-version 3,\n"
++ "  profileType '89000123456789012341'H,\n  iccid '89000123456789012341'H,\n"
++ "  eUICC-Mandatory-services { usim NULL },\n"
++ "  eUICC-Mandatory-GFSTEList { { 2 23 143 1 2 1 } }\n}\n";
 
 /* The same document, with a PE-MF that has no ef-iccid. The reader names the
    member; the finding should also carry its type and the line of the ASN.1
@@ -103,27 +111,57 @@ srv.stdout.on("data", (d) => {
         contentChanges: [{ text: BAD }] } });
     }
 
-    if (msg.method === "textDocument/publishDiagnostics" && edited && !hovered) {
+    if (msg.method === "textDocument/publishDiagnostics" && edited && !typed) {
       const d = msg.params.diagnostics;
       if (!d.length) return;
       const at = d[0].range.start;
       console.log(`  after an edit and no save: line ${at.line + 1} ` +
                   `column ${at.character + 1}  ${d[0].message}`);
-      /* The reader stops at the first one it wants, which is mf. */
-      if (!/missing mandatory member 'mf'/.test(d[0].message)) {
-        console.log("FAIL: the missing member was not reported"); process.exit(1);
-      }
-      /* The reader names the member; the schema names its type. */
-      if (!/of type File/.test(d[0].message)) {
-        console.log("FAIL: the finding was not given the member's type"); process.exit(1);
+      /*
+       * The reader stops at the first member it wants, which is mf, and says
+       * "PE-MF is missing mandatory member 'mf'". The wording below is
+       * TypeScript's, from the compiler that ships inside VS Code.
+       */
+      if (d[0].message !== "Property 'mf' is missing in type 'PE-MF'.") {
+        console.log("FAIL: the finding was not put in TypeScript's words");
+        process.exit(1);
       }
       const rel = d[0].relatedInformation;
-      if (!rel || !/declared here/.test(rel[0].message) || !/\.asn$/.test(rel[0].location.uri)) {
+      if (!rel || rel[0].message !== "'mf' is declared here."
+          || !/\.asn$/.test(rel[0].location.uri)) {
         console.log(`FAIL: no pointer to the declaration (${JSON.stringify(rel)})`);
         process.exit(1);
       }
       console.log(`  related: ${rel[0].location.uri.split("/").pop()}` +
                   `(${rel[0].location.range.start.line + 1})  ${rel[0].message}`);
+
+      /* And a value of the wrong type, which carries the other two texts. */
+      typed = true;
+      send({ jsonrpc: "2.0", method: "textDocument/didChange", params: {
+        textDocument: { uri: "file:///tmp/x.vn", version: 3 },
+        contentChanges: [{ text: WRONGTYPE }] } });
+      /* The branch below checks the same message object, and this one has
+         already been answered. */
+      return;
+    }
+
+    if (msg.method === "textDocument/publishDiagnostics" && typed && !hovered) {
+      const d = msg.params.diagnostics;
+      if (!d.length) return;
+      console.log(`  ${d[0].message}`);
+      if (d[0].message !== "Type 'hstring' is not assignable to type 'UTF8String'.") {
+        console.log("FAIL: the type mismatch was not put in TypeScript's words");
+        process.exit(1);
+      }
+      const r = d[0].relatedInformation;
+      const want = "The expected type comes from property 'profileType' " +
+                   "which is declared here on type 'ProfileHeader'";
+      if (!r || r[0].message !== want) {
+        console.log(`FAIL: expected the TypeScript related text, got ${r && r[0].message}`);
+        process.exit(1);
+      }
+      console.log(`  ${r[0].location.uri.split("/").pop()}` +
+                  `(${r[0].location.range.start.line + 1}): ${r[0].message}`);
 
       hovered = true;
       send({ jsonrpc: "2.0", id: 3, method: "textDocument/hover", params: {
@@ -134,7 +172,7 @@ srv.stdout.on("data", (d) => {
     if (msg.id === 3) {
       const v = msg.result && msg.result.contents && msg.result.contents.value;
       console.log("  hover: " + String(v).split("\n").filter(Boolean).slice(0, 2).join(" | "));
-      if (!v || !/iccid/.test(v) || !/OCTET STRING/.test(v)) {
+      if (!v || !/profileType/.test(v) || !/UTF8String/.test(v) || !/optional/.test(v)) {
         console.log("FAIL: hover did not name the member and its type");
         process.exit(1);
       }

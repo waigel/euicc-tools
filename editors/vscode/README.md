@@ -69,10 +69,20 @@ because there is no other token to point at and the object is what is wrong.
 A rule failure is marked on the first line of the profile element it belongs
 to, because a rule names an element and not a position in a file.
 
-A finding about a missing member also carries the member's type and a link to
-the line of the ASN.1 that declares it, the way TypeScript points at a
-property's declaration. Finding that line is a text search of the schema
-source, not a parse; a miss costs the link and nothing else.
+A finding that the schema can say more about is restated in TypeScript's
+words, taken from the compiler that ships inside VS Code:
+
+    Property 'mf' is missing in type 'PE-MF'.
+      profile-3.4.1.asn(329): 'mf' is declared here.
+
+    Type 'hstring' is not assignable to type 'UTF8String'.
+      profile-3.4.1.asn(76): The expected type comes from property
+      'profileType' which is declared here on type 'ProfileHeader'
+
+`euicc` decides what is wrong; this only says it with what the schema adds.
+Where the member cannot be worked out, the finding is shown as `euicc` gave
+it. Finding the declaration is a text search of the schema source, not a
+parse, so a miss costs the link and nothing else.
 
 Completion finds the type at the cursor by following the member names through
 the open braces. It checks nothing: a suggestion in the wrong place is a wrong
