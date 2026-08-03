@@ -47,6 +47,9 @@
       "include": "#typeref"
     },
     {
+      "include": "#fieldname-first"
+    },
+    {
       "include": "#alternative"
     },
     {
@@ -120,6 +123,15 @@
       "comment": "X.680 12.2: a type reference begins with an upper case letter. The lookbehind matters: a hyphen is a word boundary, so a plain \\b let this match Mandatory-services inside the field name eUICC-Mandatory-services, and the editor coloured half an identifier as a type.",
       "match": "(?<![-\\w])[A-Z][A-Za-z0-9-]*",
       "name": "entity.name.class.asn1"
+    },
+    "fieldname-first": {
+      "comment": "The first word on a line, which in a value is a member name. #fieldname needs a value after the name to know it is one, so a name stayed the colour of nothing until the next word was typed, and half of writing a profile happened in white. A line begins a member often enough to settle it on its own. The lookahead hands a CHOICE alternative back to #alternative, which cannot win otherwise: this rule starts at the indent, further left, and the leftmost match is the one TextMate takes.",
+      "match": "^\\s*([a-z][A-Za-z0-9-]*)(?![-\\w])(?!\\s*:[^:=])",
+      "captures": {
+        "1": {
+          "name": "meta.object-literal.key.asn1"
+        }
+      }
     },
     "alternative": {
       "comment": "X.680 29.2: an alternative of a CHOICE is written `name : value`. It selects one of a fixed set rather than naming a slot every value has, which is what an enum member is, so it takes that scope and the brighter blue #4FC1FF that themes give one. The colon is what tells the two apart, and it is the same distinction euicc has to make when reading.",

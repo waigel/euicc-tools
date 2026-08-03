@@ -134,6 +134,35 @@ function scopeAt(lines, text) {
   }
 
   /*
+   * Lines tokenized on their own, for cases the sample above cannot hold: a
+   * name still being typed, and a name that only one of two rules may claim.
+   */
+  const LINES = [
+    /* #fieldname needs a value after the name before it knows there is one,
+       so a name stayed white until the next word was typed. */
+    ["    major-vers", "major-vers", KEY],
+    ["    major-version 2,", "major-version", KEY],
+    /* #fieldname-first starts at the indent, further left than #alternative,
+       and the leftmost match wins. Its lookahead has to hand the colon case
+       back -- and a word boundary with it, or the regex gives up its last
+       letter to satisfy the lookahead and claims the name anyway. */
+    ["        fillFileContent : '3F00'H", "fillFileContent", ALT],
+    ["        fillFileContent", "fillFileContent", KEY],
+    ["value1 ProfileElement ::= header : {", "value1", null],
+    ["value1 ProfileElement ::= header : {", "ProfileElement", "entity.name.class"],
+    ["    -- major-version 2", "major-version", "comment.line"],
+  ];
+  for (const [line, word, want] of LINES) {
+    const r = grammar.tokenizeLine(line, vsctm.INITIAL);
+    const at = line.indexOf(word);
+    const tok = r.tokens.find((t) => at >= t.startIndex && at < t.endIndex);
+    const got = tok.scopes.filter((x) => x !== "source.asn1-vn").join(",");
+    const pass = want === null ? got === "" : got.includes(want);
+    console.log(`${pass ? "ok  " : "FAIL"} ${JSON.stringify(word).padEnd(26)} ${got || "(unstyled)"}`);
+    pass ? ok++ : failed++;
+  }
+
+  /*
    * A scope is not a colour, and a colour is not a distinguishable colour.
    * Two scopes a theme resolves near each other look the same on screen
    * whatever the rules say, and that is the failure a reader sees. It has

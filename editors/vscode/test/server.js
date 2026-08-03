@@ -25,6 +25,16 @@ let asked = false;
 let edited = false;
 let typed = false;
 let hovered = false;
+let colon = false;
+let jumped = false;
+
+/* An alternative of a list written without its colon. */
+const NOCOLON =
+  "value1 ProfileElement ::= mf : {\n"
++ "  mf-header { mandated NULL, identification 1 },\n"
++ "  templateID { 2 23 143 1 2 1 },\n"
++ "  mf {\n"
++ "    fillFileContent '3F00'H\n  }\n}\n";
 
 /* A hex string where the header wants text. */
 const WRONGTYPE =
@@ -199,10 +209,33 @@ srv.stdout.on("data", (d) => {
         console.log("FAIL: hover did not name the member and its type");
         process.exit(1);
       }
+      /*
+       * A missing colon, which the reader phrases as an expectation like a
+       * type mismatch does. It is not one, and restating it as one produced
+       * "Type 'hstring' is not assignable to type 'OCTET STRING'" -- false
+       * twice, since an hstring is what an OCTET STRING takes.
+       */
+      colon = true;
+      send({ jsonrpc: "2.0", method: "textDocument/didChange", params: {
+        textDocument: { uri: "file:///tmp/x.vn", version: 4 },
+        contentChanges: [{ text: NOCOLON }] } });
+      return;
+    }
+
+    if (msg.method === "textDocument/publishDiagnostics" && colon && !jumped) {
+      const d = msg.params.diagnostics;
+      if (!d.length) return;
+      console.log(`  ${d[0].message}`);
+      if (d[0].message !== "expected : after the alternative name") {
+        console.log("FAIL: a punctuation failure was restated as a type error");
+        process.exit(1);
+      }
+
       /* And into the schema, which is where the answer to all of it lives. */
+      jumped = true;
       send({ jsonrpc: "2.0", id: 4, method: "textDocument/definition", params: {
         textDocument: { uri: "file:///tmp/x.vn" },
-        position: { line: 2, character: 4 } } });
+        position: { line: 4, character: 10 } } });
     }
 
     if (msg.id === 4) {

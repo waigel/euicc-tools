@@ -339,11 +339,31 @@ function explain(
   }
 
   /*
-   * Everything the reader phrases as an expectation: a string where a hex
-   * string belongs, a number where a brace list does. It names the shape it
-   * wanted, and the schema names the member that wanted it.
+   * The reader phrases seventeen different failures as an expectation, and
+   * only some are about the shape of a value. The rest are punctuation: a
+   * comma between members, a colon after an alternative name, a member name
+   * or a closing brace. Matching on "expected" alone turned a missing colon
+   * into
+   *
+   *     Type 'hstring' is not assignable to type 'OCTET STRING'.
+   *
+   * which is false twice over. An hstring is exactly what an OCTET STRING
+   * takes, and the value was never what the reader objected to.
+   *
+   * A list of what may be restated rather than of what may not, so a message
+   * added to the reader later is shown as it came instead of being dressed up
+   * as something it is not.
    */
-  if (!/^expected /.test(finding.message)) return null;
+  const ABOUT_THE_VALUE = [
+    /^expected '\.\.'/,
+    /^expected NULL$/,
+    /^expected TRUE or FALSE$/,
+    /^expected a "/,
+    /^expected an integer$/,
+    /^expected an enumeration identifier$/,
+    /^expected \{ to start /,
+  ];
+  if (!ABOUT_THE_VALUE.some((re) => re.test(finding.message))) return null;
 
   const text = doc.getText();
   let offset = doc.offsetAt({
