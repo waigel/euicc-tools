@@ -182,16 +182,23 @@ function scopeAt(lines, text) {
         if (aName >= bName || a.family === b.family) continue;
         const d = apart(a.col, b.col);
         /*
-         * A real cstring is 3 runs in 4731 of a published profile, and
-         * TypeScript's own object keys sit the same 19 from a string in this
-         * theme. Recorded rather than hidden: it is accepted, not unseen.
+         * A real cstring is 3 runs in 4731 of a published profile, against
+         * 1861 member names, so this pair is rare enough to live with.
+         *
+         * An earlier version of this comment also claimed TypeScript sits the
+         * same 19 apart here. It does not, and the claim came from measuring
+         * one layer of two. Dark 2026 sets semanticHighlighting, an object key
+         * is the semantic type `property`, its default scope is
+         * variable.other.property, and this theme paints variable.other
+         * #C9D1D9. TypeScript leaves its keys uncoloured -- which is not an
+         * option for a language whose files are 39 per cent member names.
          */
         const known = aName === "a member" && bName === "a string";
         const bad = d < 40 && !known;
         if (bad || d < 40)
           console.log(`${bad ? "FAIL" : "ok  "} ${String(d).padStart(3)} apart` +
             ` ${aName} ${a.col} and ${bName} ${b.col}` +
-            (known ? "  (accepted, and TypeScript is the same here)" : ""));
+            (known ? "  (accepted: 3 runs in 4731)" : ""));
         bad ? failed++ : ok++;
       }
     }
