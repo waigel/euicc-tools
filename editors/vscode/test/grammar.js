@@ -38,7 +38,7 @@ const SAMPLE = [
  * scope is wrong, for a case where what matters is what the text must not be
  * taken for.
  */
-const KEY = "meta.object-literal.key";
+const KEY = "entity.name.tag";
 const ALT = "variable.other.enummember";
 
 const EXPECT = [
@@ -53,9 +53,10 @@ const EXPECT = [
      member is, and it is not the same thing as a member name. The colon is
      what separates the two, here and in the reader. */
   ["header", ALT],
-  /* Every member name. These are object literal keys and a theme colours
-     them; leaving them plain left a profile almost entirely white, because
-     almost every word in one is a member name. */
+  /* Every member name: a mapping key without quotes, scoped as YAML keys
+     are, because every theme must keep those apart from strings or YAML is
+     unreadable. The first choice, TypeScript's object-literal key, sat 19
+     from a string in Dark 2026 -- the collision a reader kept seeing. */
   ["major-version", KEY],
   ["profileType", KEY],
   ["usim", KEY],
@@ -219,23 +220,17 @@ function scopeAt(lines, text) {
         if (aName >= bName || a.family === b.family) continue;
         const d = apart(a.col, b.col);
         /*
-         * A real cstring is 3 runs in 4731 of a published profile, against
-         * 1861 member names, so this pair is rare enough to live with.
-         *
-         * An earlier version of this comment also claimed TypeScript sits the
-         * same 19 apart here. It does not, and the claim came from measuring
-         * one layer of two. Dark 2026 sets semanticHighlighting, an object key
-         * is the semantic type `property`, its default scope is
-         * variable.other.property, and this theme paints variable.other
-         * #C9D1D9. TypeScript leaves its keys uncoloured -- which is not an
-         * option for a language whose files are 39 per cent member names.
+         * There used to be an accepted pair here: a member 19 from a string in
+         * Dark 2026, waved through as rare. The member scope moved to the one
+         * YAML keys carry -- every theme must keep those apart from strings or
+         * YAML is unreadable -- and the exemption went with it, because an
+         * exemption for a pair that is no longer near is a door left open for
+         * it to come back.
          */
-        const known = aName === "a member" && bName === "a string";
-        const bad = d < 40 && !known;
-        if (bad || d < 40)
-          console.log(`${bad ? "FAIL" : "ok  "} ${String(d).padStart(3)} apart` +
-            ` ${aName} ${a.col} and ${bName} ${b.col}` +
-            (known ? "  (accepted: 3 runs in 4731)" : ""));
+        const bad = d < 40;
+        if (bad)
+          console.log(`FAIL ${String(d).padStart(3)} apart` +
+            ` ${aName} ${a.col} and ${bName} ${b.col}`);
         bad ? failed++ : ok++;
       }
     }

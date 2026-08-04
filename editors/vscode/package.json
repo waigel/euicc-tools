@@ -1,7 +1,7 @@
 {
   "name": "euicc-vn",
   "displayName": "eUICC profile packages",
-  "version": "0.16.1",
+  "version": "0.17.0",
   "description": "Write eUICC profile packages in ASN.1 value notation, with the rules checked as you save.",
   "publisher": "waigel",
   "license": "MIT",
@@ -105,7 +105,7 @@
         "language": "asn1-vn",
         "scopes": {
           "asn1Member": [
-            "meta.object-literal.key.asn1"
+            "entity.name.tag.asn1"
           ],
           "asn1Alternative": [
             "variable.other.enummember.asn1"

@@ -138,7 +138,7 @@
       "match": "^\\s*([a-z][A-Za-z0-9-]*)(?![-\\w])(?!\\s*:[^:=])",
       "captures": {
         "1": {
-          "name": "meta.object-literal.key.asn1"
+          "name": "entity.name.tag.asn1"
         }
       }
     },
@@ -148,9 +148,9 @@
       "name": "variable.other.enummember.asn1"
     },
     "fieldname": {
-      "comment": "A member name inside a value. Value notation is an object literal from top to bottom, so these carry the scope a theme colours an object literal key with: TypeScript gives meta.object-literal.key and the default dark theme paints it #9CDCFE. Without this rule almost every line of a profile is white, because almost every word in one is a member name. A name that is itself the value, an ENUMERATED identifier, is followed by a comma or a closing brace, so the lookahead leaves it plain, the way an identifier used as a value stays plain in TypeScript.",
+      "comment": "A member name inside a value: a mapping key without quotes, which is what a YAML key is, so it carries the scope YAML keys carry. The first choice here was TypeScript's meta.object-literal.key, and it collided: Dark 2026 paints that #9CDCFE and its strings #A5D6FF, nineteen apart, and a file that is 39 per cent member names read as one blue. Every theme must keep YAML keys apart from YAML strings or YAML is unreadable, so entity.name.tag is guaranteed distinct in themes nobody here has measured -- the four default ones are measured, worst pair 77 apart. A name that is itself the value, an ENUMERATED identifier, is followed by a comma or a closing brace, so the lookahead leaves it plain.",
       "match": "(?<![-\\w])[a-z][A-Za-z0-9-]*(?=\\s+[^,}\\s])",
-      "name": "meta.object-literal.key.asn1"
+      "name": "entity.name.tag.asn1"
     }
   }
 }
