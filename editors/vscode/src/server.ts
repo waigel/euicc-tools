@@ -142,6 +142,7 @@ const KIND_TYPES: [kind: string, own: string, standard: string][] = [
   ["alternative", "asn1Alternative", "enumMember"],
   ["value", "asn1Value", "enumMember"],
   ["type", "asn1Type", "type"],
+  ["reference", "asn1Reference", "variable"],
 ];
 
 let legend: string[] = [];

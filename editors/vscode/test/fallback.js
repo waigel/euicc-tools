@@ -77,7 +77,7 @@ function run(caps, verdict) {
                  "variable", "function"],
     tokenModifiers: [], formats: ["relative"] } } };
   let why = await run(standardOnly, (legend, kinds) => {
-    if (legend.join(",") !== "property,enumMember,type")
+    if (legend.join(",") !== "property,enumMember,type,variable")
       return `legend was ${legend.join(",")}`;
     if (!kinds.includes("property") || !kinds.includes("enumMember"))
       return `kinds were ${[...new Set(kinds)].join(",")}`;

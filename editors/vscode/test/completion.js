@@ -320,6 +320,9 @@ const CLASSIFY = [
   const text = CLASSIFY;
   const got = classify(schema, text).map((c) => [text.substr(c.offset, c.length), c.kind]);
   const want = [
+    /* the declared constant's name, emitted only once the type name after it
+       confirms an assignment head */
+    ["value1", "reference"],
     ["ProfileElement", "type"],
     /* The same word twice: an alternative of ProfileElement, then a member of
        PE-PUKCodes. Nothing in the text says which. */

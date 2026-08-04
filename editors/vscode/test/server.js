@@ -328,8 +328,9 @@ send({ jsonrpc: "2.0", id: 1, method: "initialize",
             feature has appended the contributed types to the standard list.
             The server negotiates its legend from this. */
          textDocument: { semanticTokens: {
-           tokenTypes: ["property", "enumMember", "type",
-                        "asn1Member", "asn1Alternative", "asn1Value", "asn1Type"],
+           tokenTypes: ["property", "enumMember", "type", "variable",
+                        "asn1Member", "asn1Alternative", "asn1Value", "asn1Type",
+                        "asn1Reference"],
            tokenModifiers: [], formats: ["relative"] } } } } });
 send({ jsonrpc: "2.0", method: "initialized", params: {} });
 send({ jsonrpc: "2.0", method: "textDocument/didOpen", params: { textDocument: {

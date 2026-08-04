@@ -252,6 +252,7 @@ function scopeAt(lines, text) {
       ["asn1Member", "a member", "profileType"],
       ["asn1Alternative", "an alternative", "header"],
       ["asn1Type", "a type", "ProfileElement"],
+      ["asn1Reference", "the reference", "value1"],
     ];
     for (const [token, what, sample] of SAME) {
       const semantic = c(["source.asn1-vn", ...pinned[token]]);

@@ -1,7 +1,7 @@
 {
   "name": "euicc-vn",
   "displayName": "eUICC profile packages",
-  "version": "0.19.0",
+  "version": "0.20.0",
   "description": "Write eUICC profile packages in ASN.1 value notation, with the rules checked as you save.",
   "publisher": "waigel",
   "license": "MIT",
@@ -98,6 +98,11 @@
         "id": "asn1Type",
         "superType": "type",
         "description": "A type reference."
+      },
+      {
+        "id": "asn1Reference",
+        "superType": "variable",
+        "description": "A value reference: the declared constant's name before ` Type ::=`."
       }
     ],
     "semanticTokenScopes": [
@@ -115,6 +120,9 @@
           ],
           "asn1Type": [
             "entity.name.class.asn1"
+          ],
+          "asn1Reference": [
+            "variable.other.constant.asn1"
           ]
         }
       }

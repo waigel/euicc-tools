@@ -191,7 +191,7 @@ export function analyze(schema: Schema, text: string, offset: number): Context {
 export interface Classified {
   offset: number;
   length: number;
-  kind: "member" | "alternative" | "value" | "type";
+  kind: "member" | "alternative" | "value" | "type" | "reference";
 }
 
 /*
@@ -271,6 +271,13 @@ function scan(
   /* The named nodes whose braces are open, innermost last. */
   const openNodes: Node[] = [];
   const nodeDepth: (Node | null)[] = [];
+  /*
+   * A lowercase word at the top level that is not an alternative of the root
+   * is, if a type name follows it, a value reference: `value2 ProfileElement
+   * ::=`. Emitted only when the type name arrives, so a half-typed
+   * alternative is not claimed as one.
+   */
+  let pendingRef: { offset: number; length: number } | null = null;
   const top = () => stack[stack.length - 1];
 
   let i = 0;
@@ -321,6 +328,7 @@ function scan(
     }
 
     if (c === "{") {
+      pendingRef = null;
       const f = top();
       const t = f.type ? schema.types[f.type] : undefined;
       let next: string | null = null;
@@ -365,6 +373,7 @@ function scan(
       continue;
     }
     if (c === "}") {
+      pendingRef = null;
       if (stack.length > 1) stack.pop();
       if (roots && nodeDepth.length) {
         const n = nodeDepth.pop();
@@ -380,6 +389,7 @@ function scan(
       continue;
     }
     if (c === ",") {
+      pendingRef = null;
       expect = null;
       labels = [];
       labelStart = -1;
@@ -407,6 +417,8 @@ function scan(
       if (expect === null) {
         const sc = nameScope(schema, top().type);
         const m = sc?.type.members?.find((x) => x.name === word);
+        if (!m && top().type === null)
+          pendingRef = { offset: i, length: word.length };
         top().used.push(word);
         if (labels.length === 0) { labelStart = i; labelLength = word.length; }
         labels.push(word);
@@ -422,6 +434,8 @@ function scan(
                  || schema.types[expect.type]?.kind === "OPEN TYPE") {
         const alt: Member | undefined =
           schema.types[expect.type].members?.find((x) => x.name === word);
+        if (!alt && expect.name === "")
+          pendingRef = { offset: i, length: word.length };
         if (labels.length === 0) { labelStart = i; labelLength = word.length; }
         labels.push(word);
         owner = expect.type;
@@ -432,7 +446,12 @@ function scan(
            name -- the case a grammar cannot tell from a member at all. */
         here("value");
       } else if (schema.types[word]) {
-        /* A type reference, as in `valueN ProfileElement ::=`. */
+        /* A type reference, as in `valueN ProfileElement ::=` -- and the
+           lowercase word before it was the value reference. */
+        if (pendingRef) {
+          emit?.({ ...pendingRef, kind: "reference" });
+          pendingRef = null;
+        }
         here("type");
       }
       i = j;
