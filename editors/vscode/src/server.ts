@@ -126,23 +126,45 @@ function ruleDocs(code: string): { href: string } | undefined {
  * 39 per cent of a profile in the editor foreground under Dark 2026, which is
  * where this started.
  */
-const LEGEND = {
-  tokenTypes: ["asn1Member", "asn1Alternative", "asn1Value", "asn1Type"],
-  tokenModifiers: [] as string[],
-};
+/*
+ * Per kind: our own type, then the standard type a client that has never
+ * heard of ours still knows. terraform-ls resolves every token through the
+ * same pair (token_encoder.go, firstSupportedTokenType): in VS Code, where
+ * the extension advertises the contributed types, the custom name wins and
+ * the pinned scopes decide the colour; in Neovim or Helix the standard name
+ * wins and their own highlighting applies. Before this negotiation the legend
+ * was the four custom names unconditionally, and an editor that did not know
+ * them rendered the semantic layer as nothing at all -- while the README
+ * promised exactly those editors.
+ */
+const KIND_TYPES: [kind: string, own: string, standard: string][] = [
+  ["member", "asn1Member", "property"],
+  ["alternative", "asn1Alternative", "enumMember"],
+  ["value", "asn1Value", "enumMember"],
+  ["type", "asn1Type", "type"],
+];
 
-const KIND_TO_TOKEN: Record<string, number> = {
-  member: 0,
-  alternative: 1,
-  value: 2,
-  type: 3,
-};
+let legend: string[] = [];
+let kindIndex: Record<string, number> = {};
 
 const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);
 let settings: Settings = DEFAULTS;
 
-connection.onInitialize((_params: InitializeParams) => ({
+connection.onInitialize((params: InitializeParams) => {
+  const known = params.capabilities.textDocument?.semanticTokens?.tokenTypes ?? [];
+  legend = [];
+  kindIndex = {};
+  for (const [kind, own, standard] of KIND_TYPES) {
+    const name = known.includes(own) ? own
+      : known.includes(standard) ? standard
+      : null;
+    if (name === null) continue; /* this client cannot show the kind */
+    let at = legend.indexOf(name);
+    if (at < 0) { at = legend.length; legend.push(name); }
+    kindIndex[kind] = at;
+  }
+  return {
   capabilities: {
     textDocumentSync: TextDocumentSyncKind.Incremental,
     completionProvider: {
@@ -157,12 +179,16 @@ connection.onInitialize((_params: InitializeParams) => ({
     hoverProvider: true,
     definitionProvider: true,
     typeDefinitionProvider: true,
-    semanticTokensProvider: { legend: LEGEND, full: true },
+    semanticTokensProvider: {
+      legend: { tokenTypes: legend, tokenModifiers: [] },
+      full: true,
+    },
     documentSymbolProvider: true,
     codeActionProvider: { codeActionKinds: [CodeActionKind.QuickFix] },
     documentFormattingProvider: true,
   },
-}));
+  };
+});
 
 let settingsReady: Promise<void> | undefined;
 
@@ -817,8 +843,10 @@ connection.languages.semanticTokens.on(async (params) => {
    * What marks it is the diagnostic.
    */
   for (const c of m.classified) {
+    const idx = kindIndex[c.kind];
+    if (idx === undefined) continue;
     const at = doc.positionAt(c.offset);
-    builder.push(at.line, at.character, c.length, KIND_TO_TOKEN[c.kind], 0);
+    builder.push(at.line, at.character, c.length, idx, 0);
   }
   return builder.build();
 });

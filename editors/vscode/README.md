@@ -39,7 +39,11 @@ another, and nothing in the text says which. An identifier standing for a
 number, `pukAppl1`, matches no grammar rule at all.
 
 The token types are pinned to the scopes the grammar already uses, so this
-settles what a word is without changing what it looks like. A name the schema
+settles what a word is without changing what it looks like. The names are
+negotiated: in VS Code the extension advertises them and the pinned scopes
+decide the colour; an editor that has never heard of them, Neovim or Helix,
+gets `property`, `enumMember` and `type` instead, and its own highlighting
+applies -- the same pairing terraform-ls resolves every token through. A name the schema
 does not know is not reported: a semantic token can add a colour and never
 remove one, so a typo is marked by the diagnostic and not by this.
 

@@ -323,7 +323,14 @@ srv.stdout.on("data", (d) => {
 });
 
 send({ jsonrpc: "2.0", id: 1, method: "initialize",
-       params: { processId: process.pid, rootUri: null, capabilities: {} } });
+       params: { processId: process.pid, rootUri: null, capabilities: {
+         /* What VS Code sends once the extension's ContributedTokenTypes
+            feature has appended the contributed types to the standard list.
+            The server negotiates its legend from this. */
+         textDocument: { semanticTokens: {
+           tokenTypes: ["property", "enumMember", "type",
+                        "asn1Member", "asn1Alternative", "asn1Value", "asn1Type"],
+           tokenModifiers: [], formats: ["relative"] } } } } });
 send({ jsonrpc: "2.0", method: "initialized", params: {} });
 send({ jsonrpc: "2.0", method: "textDocument/didOpen", params: { textDocument: {
   uri: "file:///tmp/x.vn", languageId: "asn1-vn", version: 1,
