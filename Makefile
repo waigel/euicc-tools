@@ -19,11 +19,11 @@ WARN    := -Wall -Wextra -Wno-unused-parameter \
            -Werror=implicit-function-declaration -Werror=int-conversion
 
 VENDOR  := vendor
-EPT     := $(VENDOR)/euicc-profile-tool
-VN      := $(EPT)/asn1c-vn
-ASN1C   := $(EPT)/asn1c
+SCHEMA  := $(VENDOR)/euicc-schema
+VN      := $(SCHEMA)/asn1c-vn
+ASN1C   := $(SCHEMA)/asn1c
 RULES   := $(VENDOR)/saip-validator/rules
-DIST    := $(EPT)/dist
+DIST    := $(SCHEMA)/dist
 
 # asn1c copies only the skeletons that a schema uses, so a generated directory
 # is missing headers that asn1c-vn includes: RELATIVE-OID.h among them. The
@@ -46,7 +46,7 @@ INC := -Isrc -I$(VN)/include -I$(VN)/src -I$(SKELDIR) $(XML_CFLAGS)
 # The schema source, so `euicc schema` can say where a type is declared. Only
 # a location: the schema itself is read from asn1c's descriptors and never
 # from this file.
-ASN     := $(EPT)/profile-3.4.1.asn
+ASN     := $(SCHEMA)/profile-3.4.1.asn
 
 # The number is what the language server compares against its minimum, so it
 # moves when the CLI's surface does. The commit is for a bug report, and a
@@ -92,7 +92,7 @@ $(ASN1C)/asn1c/asn1c:
 	cd $(ASN1C) && { test -f configure || autoreconf -iv; } && ./configure && $(MAKE)
 
 $(DIST)/ProfileElement.h: $(ASN1C)/asn1c/asn1c
-	$(MAKE) -C $(EPT) dist ASN1C="$(abspath $(ASN1C)/asn1c/asn1c)"
+	$(MAKE) -C $(SCHEMA) dist ASN1C="$(abspath $(ASN1C)/asn1c/asn1c)"
 
 codec: $(DIST)/ProfileElement.h
 
@@ -153,4 +153,4 @@ clean:
 	rm -rf build euicc
 
 distclean: clean
-	$(MAKE) -C $(EPT) distclean 2>/dev/null || true
+	$(MAKE) -C $(SCHEMA) distclean 2>/dev/null || true

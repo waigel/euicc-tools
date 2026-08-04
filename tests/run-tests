@@ -41,7 +41,7 @@ sed "s/'89000123456789012341'H/'8900'H/" "$tmp/good.vn" > "$tmp/short.vn"
   && ok "a short ICCID is refused" || bad "a short ICCID is refused"
 
 # Every published profile must stay clean.
-for d in "$root"/vendor/euicc-profile-tool/testdata/*.der; do
+for d in "$root"/vendor/euicc-schema/testdata/*.der; do
   [ -f "$d" ] || continue
   "$E" check "$d" >/dev/null 2>&1 && ok "clean: $(basename "$d")" || bad "clean: $(basename "$d")"
 done
@@ -125,7 +125,7 @@ grep -q '"ProfileElement": {"kind": "CHOICE"' "$tmp/schema.json" \
 # Every alternative of the source CHOICE, one for one. A missing branch is the
 # failure that matters here and it is invisible in a dump read on its own.
 sed -n '/^ProfileElement[[:space:]]*::=/,/^}/p' \
-    "$root/vendor/euicc-profile-tool/profile-3.4.1.asn" \
+    "$root/vendor/euicc-schema/profile-3.4.1.asn" \
   | sed -n 's/^[[:space:]]*\([a-z][A-Za-z0-9-]*\)[[:space:]][[:space:]]*[A-Za-z].*/\1/p' \
   | sort -u > "$tmp/want"
 blk ProfileElement | names | sort -u > "$tmp/have"
@@ -270,7 +270,7 @@ printf 'value1 ProfileElement ::= header : {\n eUICC-Mandatory-GFSTEList { { 2 2
   || bad "fmt: an object identifier stays on one line"
 
 # The writer and the formatter have to agree on what canonical means.
-for d in "$root"/vendor/euicc-profile-tool/testdata/*.der; do
+for d in "$root"/vendor/euicc-schema/testdata/*.der; do
   [ -f "$d" ] || continue
   "$E" show "$d" 2>/dev/null > "$tmp/canon.vn"
   "$E" fmt "$tmp/canon.vn" 2>/dev/null | cmp -s - "$tmp/canon.vn" \

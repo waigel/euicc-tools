@@ -7,7 +7,7 @@
  * descriptors, so nothing here parses ASN.1. A second parser would be a second
  * thing that can disagree with the first.
  *
- * The output is a map of types rather than a list of paths. euicc-profile-tool
+ * The output is a map of types rather than a list of paths. euicc-schema
  * writes paths, because documentation wants a page per place a thing occurs;
  * an editor wants the opposite. One File is referenced by a dozen members, and
  * a path list repeats its whole subtree under each of them, while a client

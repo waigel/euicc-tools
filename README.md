@@ -56,7 +56,7 @@ and `--skel`.
 
 | Submodule | Supplies |
 | --- | --- |
-| `vendor/euicc-profile-tool` | the schema, asn1c, and asn1c-vn |
+| `vendor/euicc-schema` | the schema, asn1c, and asn1c-vn |
 | `vendor/saip-validator` | the 112 rules, as ISO Schematron |
 
 The rules are not copied here. They stay in the submodule, so a correction

@@ -28,7 +28,7 @@ const oniguruma = require("vscode-oniguruma");
 const EUICC = process.argv[2] || path.join(__dirname, "..", "..", "..", "euicc");
 const GRAMMAR = path.join(__dirname, "..", "syntaxes", "asn1-vn.tmLanguage.json");
 const TESTDATA = path.join(__dirname, "..", "..", "..", "vendor",
-  "euicc-profile-tool", "testdata");
+  "euicc-schema", "testdata");
 
 (async () => {
   if (!fs.existsSync(TESTDATA) || !fs.existsSync(EUICC)) {

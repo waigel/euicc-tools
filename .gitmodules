@@ -1,6 +1,6 @@
-[submodule "vendor/euicc-profile-tool"]
-	path = vendor/euicc-profile-tool
-	url = https://github.com/waigel/euicc-profile-tool.git
+[submodule "vendor/euicc-schema"]
+	path = vendor/euicc-schema
+	url = https://github.com/waigel/euicc-schema.git
 [submodule "vendor/saip-validator"]
 	path = vendor/saip-validator
 	url = https://github.com/waigel/saip-validator.git
