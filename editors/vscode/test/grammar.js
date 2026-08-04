@@ -38,7 +38,7 @@ const SAMPLE = [
  * scope is wrong, for a case where what matters is what the text must not be
  * taken for.
  */
-const KEY = "entity.name.tag";
+const KEY = "variable.other.property";
 const ALT = "variable.other.enummember";
 
 const EXPECT = [
@@ -53,10 +53,10 @@ const EXPECT = [
      member is, and it is not the same thing as a member name. The colon is
      what separates the two, here and in the reader. */
   ["header", ALT],
-  /* Every member name: a mapping key without quotes, scoped as YAML keys
-     are, because every theme must keep those apart from strings or YAML is
-     unreadable. The first choice, TypeScript's object-literal key, sat 19
-     from a string in Dark 2026 -- the collision a reader kept seeing. */
+  /* Every member name, scoped by kind: variable.other.property is what HCL
+     pins its attribute names to and what TypeScript's semantic `property`
+     resolves to, so a member renders as those render, theme by theme. The
+     anchor check below holds the equality. */
   ["major-version", KEY],
   ["profileType", KEY],
   ["usim", KEY],
@@ -220,14 +220,19 @@ function scopeAt(lines, text) {
         if (aName >= bName || a.family === b.family) continue;
         const d = apart(a.col, b.col);
         /*
-         * There used to be an accepted pair here: a member 19 from a string in
-         * Dark 2026, waved through as rare. The member scope moved to the one
-         * YAML keys carry -- every theme must keep those apart from strings or
-         * YAML is unreadable -- and the exemption went with it, because an
-         * exemption for a pair that is no longer near is a door left open for
-         * it to come back.
+         * A member renders exactly as the theme renders a TypeScript property
+         * -- the anchor check below asserts the equality, not merely
+         * closeness -- and the 2026 themes put property names at or near the
+         * foreground on purpose: Terraform attributes and TypeScript keys
+         * read that way there too. So member-against-plain is the theme's own
+         * convention, not a defect, and it is the one pair excused. Every
+         * other pair, member against string above all, must keep its
+         * distance.
          */
-        const bad = d < 40;
+        const convention =
+          (aName === "a member" && b.family === "syntax") ||
+          (bName === "a member" && a.family === "syntax");
+        const bad = d < 40 && !convention;
         if (bad)
           console.log(`FAIL ${String(d).padStart(3)} apart` +
             ` ${aName} ${a.col} and ${bName} ${b.col}`);
@@ -267,6 +272,20 @@ function scopeAt(lines, text) {
       const a = c(["source.asn1-vn", ...pinned.asn1Alternative]);
       const same = v === a;
       console.log(`${same ? "ok  " : "FAIL"} asn1Value       ${v} shares the alternative colour`);
+      same ? ok++ : failed++;
+    }
+
+    /*
+     * The anchor: a member is the kind `property`, so it must be the exact
+     * colour this theme gives a TypeScript property. Not close -- equal.
+     * This is what replaces colour engineering: the theme owns the colour,
+     * we own the kind.
+     */
+    {
+      const anchor = c(["source.ts", "variable.other.property"]);
+      const member = at.get("a member").col;
+      const same = anchor === member;
+      console.log(`${same ? "ok  " : "FAIL"} a member is this theme's TypeScript property colour (${member})`);
       same ? ok++ : failed++;
     }
 

@@ -71,7 +71,7 @@
       "name": "comment.block.asn1"
     },
     "hexstring": {
-      "comment": "X.680 12.12: an hstring denotes a value, not text. Quotes around it make it look like a string, and calling it one put 30 per cent of a real profile in the colour of prose -- next to the 39 per cent that are member names, which the Dark 2026 theme paints #9CDCFE against #A5D6FF for a string. Two thirds of a file in one indistinguishable blue. As a numeric constant it is #B5CEA8 in every default theme, which is also what it is.",
+      "comment": "X.680 12.12: an hstring denotes a value, not text. Quotes around it make it look like a string, and calling it one once put 30 per cent of a real profile in the colour of prose, right beside the member names. As a numeric constant it is distinct in every default theme, which is also what it is.",
       "match": "'[0-9A-Fa-f\\s]*'[Hh]",
       "name": "constant.numeric.hex.asn1"
     },
@@ -138,7 +138,7 @@
       "match": "^\\s*([a-z][A-Za-z0-9-]*)(?![-\\w])(?!\\s*:[^:=])",
       "captures": {
         "1": {
-          "name": "entity.name.tag.asn1"
+          "name": "variable.other.property.asn1"
         }
       }
     },
@@ -148,9 +148,9 @@
       "name": "variable.other.enummember.asn1"
     },
     "fieldname": {
-      "comment": "A member name inside a value: a mapping key without quotes, which is what a YAML key is, so it carries the scope YAML keys carry. The first choice here was TypeScript's meta.object-literal.key, and it collided: Dark 2026 paints that #9CDCFE and its strings #A5D6FF, nineteen apart, and a file that is 39 per cent member names read as one blue. Every theme must keep YAML keys apart from YAML strings or YAML is unreadable, so entity.name.tag is guaranteed distinct in themes nobody here has measured -- the four default ones are measured, worst pair 77 apart. A name that is itself the value, an ENUMERATED identifier, is followed by a comma or a closing brace, so the lookahead leaves it plain.",
+      "comment": "A member name inside a value, and its scope names the KIND and nothing else: variable.other.property is what HCL's hcl-attrName pins and what TypeScript's semantic `property` resolves to, so a member here renders exactly as an attribute renders in Terraform and a key renders in TypeScript, theme by theme -- light blue in Dark Modern, the quiet foreground grey in the 2026 themes. Two earlier choices here engineered a colour instead: meta.object-literal.key collided with the 2026 string nineteen apart, and entity.name.tag made members green by claiming they were tags, which a reader rightly read as the wrong kind. A name that is itself the value, an ENUMERATED identifier, is followed by a comma or a closing brace, so the lookahead leaves it plain -- and the semantic layer marks it as a value from the schema.",
       "match": "(?<![-\\w])[a-z][A-Za-z0-9-]*(?=\\s+[^,}\\s])",
-      "name": "entity.name.tag.asn1"
+      "name": "variable.other.property.asn1"
     }
   }
 }
