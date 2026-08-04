@@ -1,0 +1,239 @@
+-- A complete profile package: the smallest one that `euicc check -s` accepts
+-- without a single finding. Every value is taken from the GSMA TS48 generic
+-- test profile, so the file descriptors and access rules are the ones real
+-- cards carry.
+--
+-- Order carries meaning here. The header comes first (SAIP-HDR-02), PE-End
+-- comes last (SAIP-END-02), and PE-PUKCodes sits directly after the MF. Move
+-- any of them and `euicc check` names the clause you broke.
+
+value1 ProfileElement ::= header : {
+    major-version 2,
+    minor-version 3,
+    profileType "euicc-tools example profile",
+    iccid '89000123456789012341'H,
+    -- Only what this package actually provides. Claim a service the elements
+    -- below do not deliver and the mandated-services rule fires.
+    eUICC-Mandatory-services {
+        usim NULL
+    },
+    -- One OID per template used below: the MF and the USIM.
+    eUICC-Mandatory-GFSTEList {
+        { 2 23 143 1 2 1 },
+        { 2 23 143 1 2 4 }
+    }
+}
+
+-- The master file, with the three files every profile must create: the ICCID,
+-- the application directory, and the access rules that every
+-- securityAttributesReferenced in this package points into.
+value2 ProfileElement ::= mf : {
+    mf-header {
+        mandated NULL,
+        identification 2
+    },
+    templateID { 2 23 143 1 2 1 },
+    mf {
+        fileDescriptor : {
+            securityAttributesReferenced '2F0601'H,
+            pinStatusTemplateDO '010A0B'H
+        }
+    },
+    ef-iccid {
+        fileDescriptor : {
+            fileDescriptor '4121'H,
+            fileID '2FE2'H,
+            securityAttributesReferenced '2F0603'H,
+            shortEFID '10'H
+        },
+        -- The ICCID as it sits in the file: nibble-swapped BCD of the header's
+        -- ICCID above.
+        fillFileContent : '98001032547698103214'H
+    },
+    ef-dir {
+        fileDescriptor : {
+            fileDescriptor '42210021'H,
+            fileID '2F00'H,
+            securityAttributesReferenced '2F0602'H,
+            efFileSize '21'H
+        },
+        -- One application template: the AID of the ADF USIM below.
+        fillFileContent : '61144F0CA0000000871002FF49FF058950045553494D'H
+    },
+    ef-arr {
+        fileDescriptor : {
+            fileDescriptor '4221002E'H,
+            fileID '2F06'H,
+            securityAttributesReferenced '2F0602'H,
+            efFileSize '2E'H,
+            shortEFID '30'H
+        },
+        fillFileContent : '80015EA40683010A9501088401D4A40683010A950108'H
+    }
+}
+
+-- The unblocking codes, before the PIN codes that reference them.
+value3 ProfileElement ::= pukCodes : {
+    puk-Header {
+        mandated NULL,
+        identification 3
+    },
+    pukCodes {
+        {
+            keyReference pukAppl1,
+            pukValue '3131313131313131'H,
+            maxNumOfAttemps-retryNumLeft 170
+        }
+    }
+}
+
+-- The three key references that the pinStatusTemplateDO of the MF names:
+-- '010A0B'H is pinAppl1, adm1, adm2.
+value4 ProfileElement ::= pinCodes : {
+    pin-Header {
+        mandated NULL,
+        identification 4
+    },
+    pinCodes pinconfig : {
+        {
+            keyReference pinAppl1,
+            pinValue '30303030FFFFFFFF'H,
+            unblockingPINReference pukAppl1,
+            pinAttributes 6,
+            maxNumOfAttemps-retryNumLeft 51
+        },
+        {
+            keyReference adm1,
+            pinValue '3535353535353535'H,
+            pinAttributes 3,
+            maxNumOfAttemps-retryNumLeft 170
+        },
+        {
+            keyReference adm2,
+            pinValue '3636363636363636'H,
+            pinAttributes 3,
+            maxNumOfAttemps-retryNumLeft 170
+        }
+    }
+}
+
+-- The USIM application, trimmed to the members its template makes mandatory.
+value5 ProfileElement ::= usim : {
+    usim-header {
+        mandated NULL,
+        identification 5
+    },
+    templateID { 2 23 143 1 2 4 },
+    adf-usim {
+        fileDescriptor : {
+            fileID '7FD0'H,
+            dfName 'A0000000871002FF49FF0589'H,
+            securityAttributesReferenced '2F0601'H,
+            pinStatusTemplateDO '81010A0B'H
+        }
+    },
+    ef-imsi {
+        fileDescriptor : {
+            fileDescriptor '4121'H,
+            fileID '6F07'H,
+            securityAttributesReferenced '6F060A'H
+        },
+        fillFileContent : '080910101032547698'H
+    },
+    ef-arr {
+        fileDescriptor : {
+            fileDescriptor '42210036'H,
+            fileID '6F06'H,
+            securityAttributesReferenced '6F0608'H,
+            efFileSize '36'H
+        },
+        fillFileContent : '800101A406830101950108800102A406830181950108800158A40683010A9501
+            08'H
+    },
+    ef-ust {
+        fileDescriptor : {
+            fileDescriptor '4121'H,
+            fileID '6F38'H,
+            securityAttributesReferenced '6F0604'H,
+            efFileSize '11'H
+        },
+        fillFileContent : '9EFFBF1DFF3E0083410310010400003E11'H
+    },
+    ef-spn {
+        fileDescriptor : {
+            fileDescriptor '4121'H,
+            fileID '6F46'H,
+            securityAttributesReferenced '6F0607'H,
+            proprietaryEFInfo {
+                fillPattern '0147534D411154455354FF'H
+            }
+        }
+    },
+    ef-est {
+        fileDescriptor : {
+            fileDescriptor '4121'H,
+            fileID '6F56'H,
+            securityAttributesReferenced '6F0601'H
+        },
+        fillFileContent : '00'H
+    },
+    ef-acc {
+        fileDescriptor : {
+            fileDescriptor '4121'H,
+            fileID '6F78'H,
+            securityAttributesReferenced '6F0603'H
+        },
+        fillFileContent : '0001'H
+    },
+    ef-ecc {
+        fileDescriptor : {
+            fileDescriptor '4221000E'H,
+            fileID '6FB7'H,
+            securityAttributesReferenced '6F0608'H,
+            efFileSize '1C'H
+        },
+        fillFileContent : '11F2FF4575726F20456D6572FF00'H,
+        fillFileContent : '19F1FF456D657267656E6379FF00'H
+    }
+}
+
+-- The local PIN that the pinStatusTemplateDO of the ADF names with '81'H.
+-- A PE-PINCodes belongs to the context of the element it follows: here, after
+-- the USIM, it may define a local PIN (SAIP-PIN-05 forbids that in the MF).
+value6 ProfileElement ::= pinCodes : {
+    pin-Header {
+        mandated NULL,
+        identification 6
+    },
+    pinCodes pinconfig : {
+        {
+            keyReference secondPINAppl1,
+            pinValue '39393939FFFFFFFF'H,
+            unblockingPINReference pukAppl1,
+            pinAttributes 3,
+            maxNumOfAttemps-retryNumLeft 51
+        }
+    }
+}
+
+-- The network authentication keys for the USIM above. Milenage, so no
+-- Keccak iteration count.
+value7 ProfileElement ::= akaParameter : {
+    aka-header {
+        mandated NULL,
+        identification 7
+    },
+    algoConfiguration algoParameter : {
+        algorithmID milenage,
+        algorithmOptions '02'H,
+        key '000102030405060708090A0B0C0D0E0F'H,
+        opc '00000000000000000000000000000000'H
+    }
+}
+
+value8 ProfileElement ::= end : {
+    end-header {
+        mandated NULL,
+        identification 8
+    }
+}

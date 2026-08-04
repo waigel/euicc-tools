@@ -46,6 +46,18 @@ for d in "$root"/vendor/euicc-profile-tool/testdata/*.der; do
   "$E" check "$d" >/dev/null 2>&1 && ok "clean: $(basename "$d")" || bad "clean: $(basename "$d")"
 done
 
+# The examples the extension ships hold themselves to the strictest reading:
+# no findings, not even warnings, and the canonical layout.
+for v in "$root"/editors/vscode/examples/*.vn; do
+  [ -f "$v" ] || continue
+  "$E" check -t -s "$v" >/dev/null 2>&1 \
+    && ok "example is spotless: $(basename "$v")" \
+    || bad "example is spotless: $(basename "$v")"
+  "$E" fmt -l "$v" >/dev/null 2>&1 \
+    && ok "example is canonical: $(basename "$v")" \
+    || bad "example is canonical: $(basename "$v")"
+done
+
 # diff: the same source against the package it produced shows nothing.
 "$E" diff "$tmp/good.vn" "$tmp/good.der" 2>/dev/null | grep -q "no difference" \
   && ok "a source matches the package it built" || bad "a source matches the package it built"

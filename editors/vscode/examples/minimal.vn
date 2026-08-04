@@ -7,10 +7,17 @@ value1 ProfileElement ::= header : {
     minor-version 3,
     profileType "example",
     iccid '89000123456789012341'H,
-    eUICC-Mandatory-services { usim NULL },
-    eUICC-Mandatory-GFSTEList { { 2 23 143 1 2 1 } }
+    eUICC-Mandatory-services {
+        usim NULL
+    },
+    eUICC-Mandatory-GFSTEList {
+        { 2 23 143 1 2 1 }
+    }
 }
 
 value2 ProfileElement ::= end : {
-    end-header { mandated NULL, identification 99 }
+    end-header {
+        mandated NULL,
+        identification 99
+    }
 }
