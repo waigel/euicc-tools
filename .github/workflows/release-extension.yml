@@ -1,0 +1,63 @@
+# A tag vscode-vX.Y.Z publishes the extension to the Visual Studio
+# Marketplace and attaches the .vsix to a GitHub release.
+#
+# The tag must name the version that editors/vscode/package.json carries --
+# the guard below refuses anything else, so a tag can never publish a package
+# that answers with a different version. Publishing needs one secret:
+# VSCE_PAT, an Azure DevOps token with the Marketplace publish scope for the
+# publisher named in package.json.
+name: release-extension
+
+on:
+  push:
+    tags: ["vscode-v*"]
+
+jobs:
+  # Everything CI proves, proven again on the exact tagged commit.
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: editors/vscode
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: editors/vscode/package-lock.json
+
+      - run: npm ci
+
+      - name: the tag and the package must agree
+        run: |
+          tag="${GITHUB_REF_NAME#vscode-v}"
+          pkg="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "tag says $tag, package.json says $pkg" >&2
+            exit 1
+          fi
+
+      - name: package
+        run: npm run package
+
+      - name: publish to the Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npx vsce publish --packagePath "euicc-vn-${GITHUB_REF_NAME#vscode-v}.vsix"
+
+      - name: GitHub release with the .vsix
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "euicc-vn-${GITHUB_REF_NAME#vscode-v}.vsix" \
+            --title "euicc-vn ${GITHUB_REF_NAME#vscode-v}" \
+            --verify-tag --generate-notes

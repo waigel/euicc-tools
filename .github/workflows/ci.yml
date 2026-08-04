@@ -1,0 +1,46 @@
+# Build the binary, then hold everything to it: the CLI suite and the full
+# extension test chain, which spawns euicc from the repository root. The
+# release workflow calls this one, so a package can only ship what CI has
+# already proven.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # bison and flex are for asn1c's parser. python3-lxml is not an
+      # interpreter for anything here: it is where the Makefile finds the ISO
+      # Schematron XSLT transforms, the same place a local build reads them.
+      - name: install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y autoconf automake libtool bison flex \
+            libxml2-dev libxslt1-dev python3-lxml
+
+      - name: build euicc
+        run: make
+
+      - name: CLI tests
+        run: ./tests/run-tests
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: editors/vscode/package-lock.json
+
+      - name: extension tests
+        working-directory: editors/vscode
+        run: |
+          npm ci
+          npm test
