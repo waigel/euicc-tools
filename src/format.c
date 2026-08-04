@@ -1,31 +1,301 @@
 /*
  * format.c -- lay out value notation, one member to a line.
  *
- * This lives in the tool and not in the editor for the reason everything else
- * here does: a second reading of the language is a second thing that can
- * disagree with the first. It was in the editor once, in TypeScript, and the
- * duplicate lexer promptly shortened a cstring that ran over two lines while
- * its own check said nothing had changed.
+ * The shape is hclwrite's, the library under `terraform fmt`, and the point of
+ * that shape is what a token is allowed to carry:
  *
- * It reads text and does not go through the writer. `euicc show` produces
- * canonical value notation and looks like a formatter until you notice it
- * re-serialises a decoded value: every comment is gone and
- * `myHeader ProfileElement ::=` comes back `value1`. Format on save would
- * delete documentation without a word.
+ *     type Token struct {
+ *         Type         hclsyntax.TokenType
+ *         Bytes        []byte
+ *         SpacesBefore int
+ *     }
+ *     // Formatting must change only whitespace. Specifically, that means
+ *     // changing the SpacesBefore attribute on a token while leaving the
+ *     // other token attributes unchanged.        -- hclwrite/format.go
  *
- * The guarantee is the token list. Comparing text with whitespace collapsed
- * does not work, because a break put where there was nothing at all turns
- * `},ef-dir` into `}, ef-dir`; comparing it with whitespace removed would not
- * notice `major-version 2` becoming `major-version2`. So the tokens are
- * compared, and if they differ the input is returned untouched -- a formatter
- * that loses a comment is worse than one that does nothing.
+ * The bytes of a token are never touched; the passes may write only the
+ * whitespace counts in front of it, and the writer emits counts then bytes,
+ * verbatim. Losing a character of content is not something a pass can do by
+ * mistake, because no pass holds a pen that writes content. The first version
+ * of this file built its output character by character instead, and it
+ * shortened a cstring running over two lines while its own check said nothing
+ * had moved.
+ *
+ * One deviation from hclwrite, and it is forced by the grammar. HCL separates
+ * attributes with newlines, so its formatter never has to insert a line break,
+ * and SpacesBefore is the only mutable field. Value notation separates members
+ * with commas and a newline means nothing, so `}, ef-dir {` on one line is
+ * valid and laying it out means breaking it. Each token therefore carries
+ * NewlinesBefore as well.
+ *
+ * The lexer here is the formatter's own, which hclwrite did not need: it reuses
+ * the parser's lexer, whose comment tokens survive. Ours cannot be reused --
+ * vn_token.c's vt_skip_filler discards whitespace and comments by design,
+ * which is right for a reader and useless for a formatter. The comment rules
+ * are the library's, though: X.680 12.6.3 ends a one-line comment at the next
+ * "--" or the end of the line, and 12.6.4 nests the bracketed form. An earlier
+ * lexer here ran every line comment to the end of the line.
+ *
+ * It reads text and never goes through the writer. `euicc show` re-serialises
+ * a decoded value: every comment is gone and `myHeader ProfileElement ::=`
+ * comes back `value1`. Reading text also means a file the reader rejects can
+ * still be laid out, which is the file most in need of it.
+ *
+ * Belt and braces on top of the structure: the token list of the output is
+ * compared against the input's, and on any difference the input is returned
+ * untouched. With verbatim bytes the only way they can differ is a lexer bug,
+ * which is exactly the thing left worth catching.
  */
 
 #include "euicc.h"
 
 #include <ctype.h>
 
-/* ---- a growing buffer ---------------------------------------------------- */
+/* ---- tokens -------------------------------------------------------------- */
+
+typedef enum {
+    TK_WORD,     /* an identifier, a number, a string, any other lexeme */
+    TK_OPEN,     /* { or [ */
+    TK_CLOSE,    /* } or ] */
+    TK_COMMA,
+    TK_LCOMMENT, /* -- ... (to the next -- or the end of the line) */
+    TK_BCOMMENT, /* a bracketed comment, nesting */
+} tok_kind_e;
+
+typedef struct {
+    size_t     off, len; /* the bytes, verbatim, in the input buffer */
+    tok_kind_e kind;
+    int        nl_before; /* newlines in the gap the author left */
+    int        sp_before; /* whitespace bytes since the last of them */
+    int        out_nl;    /* what the passes decide */
+    int        out_sp;
+    int        inlined;   /* part of an all-numeric brace group */
+} tok_t;
+
+typedef struct {
+    tok_t *v;
+    size_t count, cap;
+} toks_t;
+
+static tok_t *
+tok_add(toks_t *ts) {
+    if(ts->count == ts->cap) {
+        size_t cap = ts->cap ? ts->cap * 2 : 256;
+        tok_t *v = realloc(ts->v, cap * sizeof *v);
+        if(!v) return NULL;
+        ts->v = v;
+        ts->cap = cap;
+    }
+    tok_t *t = &ts->v[ts->count++];
+    memset(t, 0, sizeof *t);
+    return t;
+}
+
+/*
+ * Split the input into tokens. Every byte of the input is either inside a
+ * token or whitespace between two, so writing the tokens back out cannot lose
+ * content -- the loop consumes what it scanned, and only isspace() bytes are
+ * stepped over.
+ */
+static int
+lex(const char *s, size_t n, toks_t *ts) {
+    size_t i = 0;
+    int nl = 0, sp = 0;
+
+    while(i < n) {
+        char c = s[i];
+
+        if(isspace((unsigned char)c)) {
+            if(c == '\n') { nl++; sp = 0; }
+            else if(c != '\r') sp++;
+            i++;
+            continue;
+        }
+
+        tok_t *t = tok_add(ts);
+        if(!t) return -1;
+        t->off = i;
+        t->nl_before = nl;
+        t->sp_before = sp;
+        nl = sp = 0;
+
+        if(c == '-' && i + 1 < n && s[i + 1] == '-') {
+            /* X.680 12.6.3: to the next "--" or the end of the line. */
+            size_t j = i + 2;
+            while(j < n && s[j] != '\n') {
+                if(s[j] == '-' && j + 1 < n && s[j + 1] == '-') { j += 2; break; }
+                j++;
+            }
+            size_t e = j;
+            while(e > i && isspace((unsigned char)s[e - 1])) e--;
+            t->kind = TK_LCOMMENT;
+            t->len = e - i;
+            /* The trimmed tail is whitespace and goes back to the gap. */
+            for(size_t k = e; k < j; k++)
+                if(s[k] != '\r') sp++;
+            i = j;
+            continue;
+        }
+        if(c == '/' && i + 1 < n && s[i + 1] == '*') {
+            /* X.680 12.6.4: the bracketed form nests. */
+            size_t j = i + 2;
+            int depth = 1;
+            while(j < n && depth > 0) {
+                if(j + 1 < n && s[j] == '/' && s[j + 1] == '*') { depth++; j += 2; }
+                else if(j + 1 < n && s[j] == '*' && s[j + 1] == '/') { depth--; j += 2; }
+                else j++;
+            }
+            t->kind = TK_BCOMMENT;
+            t->len = j - i;
+            i = j;
+            continue;
+        }
+        if(c == '"' || c == '\'') {
+            /* One token to the closing quote, however many lines that is.
+               The bytes stay verbatim, so a literal the author or the writer
+               wrapped keeps its own layout untouched. */
+            size_t j = i + 1;
+            while(j < n && s[j] != c) j++;
+            if(j < n) j++;
+            if(c == '\'' && j < n && strchr("HhBb", s[j])) j++;
+            t->kind = TK_WORD;
+            t->len = j - i;
+            i = j;
+            continue;
+        }
+        if(c == '{' || c == '[') { t->kind = TK_OPEN;  t->len = 1; i++; continue; }
+        if(c == '}' || c == ']') { t->kind = TK_CLOSE; t->len = 1; i++; continue; }
+        if(c == ',')             { t->kind = TK_COMMA; t->len = 1; i++; continue; }
+
+        if(isalnum((unsigned char)c) || c == '-') {
+            size_t j = i;
+            while(j < n && (isalnum((unsigned char)s[j]) || s[j] == '-')) j++;
+            t->kind = TK_WORD;
+            t->len = j - i;
+            i = j;
+            continue;
+        }
+        t->kind = TK_WORD;
+        t->len = 1;
+        i++;
+    }
+    return 0;
+}
+
+/* ---- the passes ----------------------------------------------------------- */
+
+static int
+all_digits(const char *s, const tok_t *t) {
+    for(size_t k = 0; k < t->len; k++)
+        if(!isdigit((unsigned char)s[t->off + k])) return 0;
+    return t->len > 0;
+}
+
+/*
+ * An OBJECT IDENTIFIER is a brace list of arcs and the writer keeps it on one
+ * line: `{ 2 23 143 1 2 1 }`. Numbers only is what tells such a group from a
+ * value, and breaking them put ninety extra lines in a published profile. An
+ * empty group is the same shape with nothing in it: `{ }`.
+ */
+static void
+mark_inline_groups(const char *s, toks_t *ts) {
+    for(size_t i = 0; i < ts->count; i++) {
+        if(ts->v[i].kind != TK_OPEN) continue;
+        size_t j = i + 1;
+        while(j < ts->count && ts->v[j].kind == TK_WORD && all_digits(s, &ts->v[j]))
+            j++;
+        if(j < ts->count && ts->v[j].kind == TK_CLOSE) {
+            for(size_t k = i; k <= j; k++) ts->v[k].inlined = 1;
+            i = j;
+        }
+    }
+}
+
+/* At most one blank line survives from the author's gap. */
+static int
+kept(int nl) {
+    return nl > 2 ? 2 : nl;
+}
+
+/*
+ * Where the line breaks go. This pass exists because value notation separates
+ * members with commas and not with newlines; it is the one thing hclwrite has
+ * no counterpart for.
+ */
+static void
+decide_newlines(toks_t *ts) {
+    for(size_t i = 0; i < ts->count; i++) {
+        tok_t *t = &ts->v[i];
+        const tok_t *prev = i ? &ts->v[i - 1] : NULL;
+
+        if(!prev) {
+            t->out_nl = kept(t->nl_before);
+            continue;
+        }
+        /* Inside an inline group nothing breaks. */
+        if(t->inlined && prev->inlined && prev->kind != TK_CLOSE) {
+            t->out_nl = 0;
+            continue;
+        }
+        /* A member starts after the brace that opens its value... */
+        if(prev->kind == TK_OPEN && !prev->inlined) {
+            t->out_nl = t->nl_before > 1 ? 2 : 1;
+            continue;
+        }
+        /* ...and a closing brace sits at the level of the thing it closes,
+           on a line of its own. */
+        if(t->kind == TK_CLOSE && !t->inlined) {
+            t->out_nl = t->nl_before > 1 ? 2 : 1;
+            continue;
+        }
+        /* One member to a line: the comma ends one. A comment right after
+           the comma is about the member it follows and stays with it. */
+        if(prev->kind == TK_COMMA) {
+            if(t->kind == TK_LCOMMENT && t->nl_before == 0) t->out_nl = 0;
+            else t->out_nl = t->nl_before > 1 ? 2 : 1;
+            continue;
+        }
+        /* Nothing continues a line after a one-line comment. */
+        if(prev->kind == TK_LCOMMENT) {
+            t->out_nl = t->nl_before > 1 ? 2 : 1;
+            continue;
+        }
+        t->out_nl = kept(t->nl_before);
+    }
+}
+
+/*
+ * Indentation for the tokens that start a line, and the author's own spacing
+ * for the ones that do not. Interior spacing is the author's on purpose: it is
+ * what lines a trailing comment up with its neighbours, and the writer's own
+ * alignment has to come back out of this untouched.
+ */
+static void
+decide_spaces(toks_t *ts, int unit) {
+    int depth = 0;
+
+    for(size_t i = 0; i < ts->count; i++) {
+        tok_t *t = &ts->v[i];
+        const tok_t *prev = i ? &ts->v[i - 1] : NULL;
+
+        if(t->kind == TK_CLOSE && !t->inlined && depth > 0) depth--;
+
+        if(t->out_nl > 0 || !prev) {
+            t->out_sp = depth * unit;
+        } else if(t->kind == TK_COMMA) {
+            t->out_sp = 0;
+        } else if(t->inlined && (prev->kind == TK_OPEN || t->kind == TK_CLOSE
+                                 || prev->inlined)) {
+            t->out_sp = 1;
+        } else {
+            t->out_sp = t->sp_before;
+        }
+
+        if(t->kind == TK_OPEN && !t->inlined) depth++;
+    }
+}
+
+/* ---- writing ------------------------------------------------------------- */
 
 typedef struct {
     char  *p;
@@ -49,292 +319,82 @@ buf_put(buf_t *b, const char *s, size_t n) {
 }
 
 static int
-buf_putc(buf_t *b, char c) {
-    return buf_put(b, &c, 1);
+buf_fill(buf_t *b, char c, int n) {
+    while(n-- > 0)
+        if(buf_put(b, &c, 1)) return -1;
+    return 0;
 }
 
-/* ---- tokens -------------------------------------------------------------- */
+/* Counts, then bytes, verbatim. This is the whole writer, which is the point:
+   there is no place in it where content could change. */
+static char *
+emit(const char *s, const toks_t *ts) {
+    buf_t b = {0};
+    for(size_t i = 0; i < ts->count; i++) {
+        const tok_t *t = &ts->v[i];
+        if(buf_fill(&b, '\n', t->out_nl)
+           || buf_fill(&b, ' ', t->out_sp)
+           || buf_put(&b, s + t->off, t->len)) {
+            free(b.p);
+            return NULL;
+        }
+    }
+    if(buf_put(&b, "\n", 1)) { free(b.p); return NULL; }
+    return b.p ? b.p : strdup("\n");
+}
+
+/* ---- the guarantee --------------------------------------------------------- */
 
 /*
- * The lexical items of X.680 clause 12, as one string with each token on its
- * own line. Two files whose token strings match hold the same value notation,
- * whatever the whitespace between them.
+ * The token list as one comparable string. X.680 12.11 and 12.12: the
+ * whitespace inside an hstring or a bstring is not part of the value, so two
+ * wrappings of one are the same token. A cstring is text and compares whole --
+ * getting that distinction wrong is how the previous formatter's check went
+ * blind at exactly the place it was needed.
  */
 static int
-fmt_tokens(const char *s, size_t n, buf_t *out) {
-    size_t i = 0;
-
-    while(i < n) {
-        char c = s[i];
-
-        if(isspace((unsigned char)c)) { i++; continue; }
-
-        if(c == '-' && i + 1 < n && s[i + 1] == '-') {
-            size_t j = i;
-            while(j < n && s[j] != '\n') j++;
-            /* Trailing whitespace is not part of what a comment says. */
-            size_t e = j;
-            while(e > i && isspace((unsigned char)s[e - 1])) e--;
-            if(buf_put(out, s + i, e - i) || buf_putc(out, '\n')) return -1;
-            i = j;
-            continue;
+token_string(const char *s, size_t n, buf_t *out) {
+    toks_t ts = {0};
+    if(lex(s, n, &ts)) { free(ts.v); return -1; }
+    for(size_t i = 0; i < ts.count; i++) {
+        const tok_t *t = &ts.v[i];
+        int hstr = s[t->off] == '\'';
+        for(size_t k = 0; k < t->len; k++) {
+            char c = s[t->off + k];
+            if(hstr && isspace((unsigned char)c)) continue;
+            if(buf_put(out, &c, 1)) { free(ts.v); return -1; }
         }
-        if(c == '/' && i + 1 < n && s[i + 1] == '*') {
-            size_t j = i + 2;
-            while(j + 1 < n && !(s[j] == '*' && s[j + 1] == '/')) j++;
-            j = (j + 1 < n) ? j + 2 : n;
-            if(buf_put(out, s + i, j - i) || buf_putc(out, '\n')) return -1;
-            i = j;
-            continue;
-        }
-        if(c == '"' || c == '\'') {
-            size_t j = i + 1;
-            while(j < n && s[j] != c) j++;
-            j = (j < n) ? j + 1 : n;
-            if(c == '\'') {
-                /*
-                 * X.680 12.11 and 12.12: the whitespace inside an hstring or a
-                 * bstring is not part of the value, so one may be wrapped over
-                 * lines freely and two spellings of it are the same token.
-                 */
-                for(size_t k = i; k < j; k++)
-                    if(!isspace((unsigned char)s[k]) && buf_putc(out, s[k])) return -1;
-                if(j < n && strchr("HhBb", s[j])) {
-                    if(buf_putc(out, s[j])) return -1;
-                    j++;
-                }
-            } else {
-                /* A cstring is text and every character of one counts. */
-                if(buf_put(out, s + i, j - i)) return -1;
-            }
-            if(buf_putc(out, '\n')) return -1;
-            i = j;
-            continue;
-        }
-        if(isalnum((unsigned char)c) || c == '-') {
-            size_t j = i;
-            while(j < n && (isalnum((unsigned char)s[j]) || s[j] == '-')) j++;
-            if(buf_put(out, s + i, j - i) || buf_putc(out, '\n')) return -1;
-            i = j;
-            continue;
-        }
-        if(buf_putc(out, c) || buf_putc(out, '\n')) return -1;
-        i++;
+        if(buf_put(out, "\x1f", 1)) { free(ts.v); return -1; }
     }
+    free(ts.v);
     return 0;
 }
 
-/* ---- the layout ---------------------------------------------------------- */
-
-/* Past the spaces and at most one newline after a break we made ourselves, so
-   the newline that was already there does not become a blank line. */
-static size_t
-swallow(const char *s, size_t n, size_t i) {
-    while(i < n && (s[i] == ' ' || s[i] == '\t')) i++;
-    if(i < n && s[i] == '\r') i++;
-    if(i < n && s[i] == '\n') {
-        i++;
-        while(i < n && (s[i] == ' ' || s[i] == '\t')) i++;
-    }
-    return i;
-}
-
-/* An OBJECT IDENTIFIER is a brace list of arcs and the writer keeps it on one
-   line: `{ 2 23 143 1 2 1 }`. Numbers only is what tells such a group from a
-   value, and breaking them put ninety extra lines in a published profile. */
-static size_t
-arc_list_end(const char *s, size_t n, size_t open, char close) {
-    for(size_t j = open + 1; j < n; j++) {
-        if(s[j] == close) return j;
-        if(!isdigit((unsigned char)s[j]) && !isspace((unsigned char)s[j])) break;
-    }
-    return 0;
-}
-
-struct layout_state {
-    buf_t  out;
-    buf_t  line;
-    int    depth;
-    int    pending;   /* the depth this line is written at, fixed as it starts */
-    int    in_block;
-    char   in_quote;  /* 0, '"' or '\'' */
-    int    verbatim;  /* a continuation line of a comment or a literal */
-    const char *unit;
-};
-
-static int
-flush(struct layout_state *st) {
-    const char *p = st->line.p ? st->line.p : "";
-    size_t len = st->line.len;
-
-    if(st->verbatim) {
-        /* The author's line. Inside a cstring not even the trailing whitespace
-           may go, because every character of one counts. */
-        size_t e = len;
-        if(st->in_quote != '"')
-            while(e > 0 && isspace((unsigned char)p[e - 1])) e--;
-        if(buf_put(&st->out, p, e)) return -1;
-    } else {
-        size_t b = 0, e = len;
-        while(b < e && isspace((unsigned char)p[b])) b++;
-        while(e > b && isspace((unsigned char)p[e - 1])) e--;
-        if(e > b) {
-            for(int k = 0; k < st->pending; k++)
-                if(buf_put(&st->out, st->unit, strlen(st->unit))) return -1;
-            if(buf_put(&st->out, p + b, e - b)) return -1;
-        }
-    }
-    if(buf_putc(&st->out, '\n')) return -1;
-
-    st->line.len = 0;
-    if(st->line.p) st->line.p[0] = '\0';
-    st->verbatim = st->in_block || st->in_quote != 0;
-    st->pending = st->depth;
-    return 0;
-}
-
-/* Only whitespace so far on this line? */
-static int
-line_blank(const struct layout_state *st) {
-    for(size_t k = 0; k < st->line.len; k++)
-        if(!isspace((unsigned char)st->line.p[k])) return 0;
-    return 1;
-}
-
-static char *
-lay_out(const char *s, size_t n, const char *unit) {
-    struct layout_state st = {0};
-    st.unit = unit;
-
-    for(size_t i = 0; i < n; i++) {
-        char c = s[i];
-
-        /*
-         * A cstring may run over lines, so the whole literal stays in one
-         * accumulated line and goes out as written. The newline is handled
-         * before the quote state below, which is why the guard is here:
-         * flushing at it trimmed the trailing whitespace off the first line of
-         * the string, and the check could not see it.
-         */
-        if(c == '\n') {
-            if(st.in_quote == '"') { if(buf_putc(&st.line, c)) goto fail; continue; }
-            if(flush(&st)) goto fail;
-            continue;
-        }
-        if(c == '\r') continue;
-
-        if(st.in_block) {
-            if(buf_putc(&st.line, c)) goto fail;
-            if(c == '/' && i > 0 && s[i - 1] == '*') st.in_block = 0;
-            continue;
-        }
-        if(st.in_quote) {
-            if(buf_putc(&st.line, c)) goto fail;
-            if(c == st.in_quote) st.in_quote = 0;
-            continue;
-        }
-        if(c == '-' && i + 1 < n && s[i + 1] == '-') {
-            while(i < n && s[i] != '\n')
-                if(buf_putc(&st.line, s[i++])) goto fail;
-            i--;
-            continue;
-        }
-        if(c == '/' && i + 1 < n && s[i + 1] == '*') {
-            st.in_block = 1;
-            if(buf_put(&st.line, "/*", 2)) goto fail;
-            i++;
-            continue;
-        }
-        if(c == '"' || c == '\'') {
-            st.in_quote = c;
-            if(buf_putc(&st.line, c)) goto fail;
-            continue;
-        }
-
-        if(c == '}' || c == ']') {
-            /* The brace closes something, so it belongs at that level and it
-               starts its own line. */
-            if(!line_blank(&st) && flush(&st)) goto fail;
-            if(st.depth > 0) st.depth--;
-            st.pending = st.depth;
-            if(buf_putc(&st.line, c)) goto fail;
-            continue;
-        }
-        if(c == '{' || c == '[') {
-            size_t close = arc_list_end(s, n, i, c == '{' ? '}' : ']');
-            if(close) {
-                size_t b = i + 1, e = close;
-                while(b < e && isspace((unsigned char)s[b])) b++;
-                while(e > b && isspace((unsigned char)s[e - 1])) e--;
-                if(buf_putc(&st.line, c)) goto fail;
-                if(e > b) {
-                    if(buf_putc(&st.line, ' ')) goto fail;
-                    if(buf_put(&st.line, s + b, e - b)) goto fail;
-                }
-                if(buf_putc(&st.line, ' ') || buf_putc(&st.line, s[close])) goto fail;
-                i = close;
-                continue;
-            }
-            if(buf_putc(&st.line, c)) goto fail;
-            st.depth++;
-            if(flush(&st)) goto fail;
-            i = swallow(s, n, i + 1) - 1;
-            continue;
-        }
-        if(c == ',') {
-            if(buf_putc(&st.line, c)) goto fail;
-            size_t j = i + 1;
-            while(j < n && (s[j] == ' ' || s[j] == '\t')) j++;
-            /* A comment after the comma stays on the line it comments on. */
-            if(!(j + 1 < n && s[j] == '-' && s[j + 1] == '-')) {
-                if(flush(&st)) goto fail;
-                i = swallow(s, n, j) - 1;
-            }
-            continue;
-        }
-        if(buf_putc(&st.line, c)) goto fail;
-    }
-    if(flush(&st)) goto fail;
-    free(st.line.p);
-
-    /* No run of blank lines longer than one, and exactly one at the end. */
-    char *p = st.out.p ? st.out.p : strdup("");
-    size_t w = 0, blanks = 0;
-    for(size_t r = 0; p[r]; r++) {
-        if(p[r] == '\n') {
-            if(++blanks > 2) continue;
-        } else {
-            blanks = 0;
-        }
-        p[w++] = p[r];
-    }
-    while(w > 0 && isspace((unsigned char)p[w - 1])) w--;
-    p[w] = '\0';
-    buf_t tail = {p, w, st.out.cap};
-    if(buf_putc(&tail, '\n')) { free(tail.p); return NULL; }
-    return tail.p;
-
-fail:
-    free(st.line.p);
-    free(st.out.p);
-    return NULL;
-}
-
-/* ---- the command --------------------------------------------------------- */
+/* ---- entry ----------------------------------------------------------------- */
 
 char *
 fmt_layout(const char *text, size_t len, const char *unit, char **why) {
     *why = NULL;
-    char *out = lay_out(text, len, unit ? unit : "    ");
+    int unit_len = unit ? (int)strlen(unit) : 4;
+
+    toks_t ts = {0};
+    if(lex(text, len, &ts)) { free(ts.v); *why = "out of memory"; return NULL; }
+
+    mark_inline_groups(text, &ts);
+    decide_newlines(&ts);
+    decide_spaces(&ts, unit_len);
+
+    char *out = emit(text, &ts);
+    free(ts.v);
     if(!out) { *why = "out of memory"; return NULL; }
 
     buf_t a = {0}, b = {0};
-    if(fmt_tokens(text, len, &a) || fmt_tokens(out, strlen(out), &b)) {
+    if(token_string(text, len, &a) || token_string(out, strlen(out), &b)) {
         free(a.p); free(b.p); free(out);
         *why = "out of memory";
         return NULL;
     }
-    int same = a.p && b.p && !strcmp(a.p, b.p);
+    int same = (a.p || b.p) ? (a.p && b.p && !strcmp(a.p, b.p)) : 1;
     free(a.p);
     free(b.p);
     if(!same) {

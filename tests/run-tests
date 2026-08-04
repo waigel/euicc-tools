@@ -267,6 +267,21 @@ for d in "$root"/vendor/euicc-profile-tool/testdata/*.der; do
   break
 done
 
+# The comment rules are the reader's, from vn_token.c. X.680 12.6.3 ends a
+# one-line comment at the next "--" as well as at the end of the line, and
+# 12.6.4 nests the bracketed form. The first formatter ran every line comment
+# to the end of the line, so `-- x -- y` was comment to the formatter and
+# partly code to the reader -- two readings of one file.
+printf 'value1 ProfileElement ::= header : {\n    major-version 2 -- note -- , minor-version 3\n}\n' > "$tmp/dd.vn"
+"$E" fmt "$tmp/dd.vn" 2>/dev/null | grep -q '^    minor-version 3$' \
+  && ok "fmt: a comment ends at the second --, as it does for the reader" \
+  || bad "fmt: a comment ends at the second --, as it does for the reader"
+
+printf '/* outer /* inner */ still comment */\nvalue1 ProfileElement ::= header : { major-version 2 }\n' > "$tmp/nest.vn"
+"$E" fmt "$tmp/nest.vn" 2>/dev/null | grep -q 'still comment \*/$' \
+  && ok "fmt: bracketed comments nest, as they do for the reader" \
+  || bad "fmt: bracketed comments nest, as they do for the reader"
+
 # It reads text, so it works on a file the reader rejects -- the file most in
 # need of laying out.
 printf 'value1 ProfileElement ::= header : {\nmajor-version nonsense\n}\n' > "$tmp/broken.vn"
