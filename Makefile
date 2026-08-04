@@ -111,7 +111,11 @@ build/gen/.stamp: $(DIST)/ProfileElement.h
 
 # ---- the binary ------------------------------------------------------------
 
-euicc: $(OWN_SRCS) src/euicc.h build/vn_annotations.c build/gen/.stamp
+# Makefile is a dependency on purpose: VERSION and GITSHA are compiled in, so
+# an edit here has to rebuild -- without this, bumping VERSION produced a
+# binary that still answered with the old one, which is precisely the
+# confusion `euicc version` exists to prevent.
+euicc: $(OWN_SRCS) src/euicc.h build/vn_annotations.c build/gen/.stamp Makefile
 	@test -n "$(XML_LIBS)" || { \
 	    echo "libxml2 and libxslt are needed; install them and try again" >&2; \
 	    exit 1; }
