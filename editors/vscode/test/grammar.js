@@ -44,11 +44,12 @@ const ALT = "variable.other.enummember";
 const EXPECT = [
   ["ProfileElement", "entity.name.class"],
   ["::=", "keyword.operator.assignment"],
-  /* `valueN Type ::=` is module syntax around the value and not part of it;
-     euicc steps over it when reading. Colouring the reference put a second
-     blue next to the alternative on the same line, near enough to it to be
-     indistinguishable. */
-  ["value1", null],
+  /* X.680 16.1 calls it a valuereference: a declared constant's name, so it
+     carries the constant kind. That it matches the alternative beside it is
+     the themes' own bundling -- `const a = Color.Red` is one blue in
+     TypeScript -- asserted below rather than dodged by leaving it plain, as
+     an earlier version did. */
+  ["value1", "variable.other.constant"],
   /* A CHOICE alternative selects one of a fixed set, which is what an enum
      member is, and it is not the same thing as a member name. The colon is
      what separates the two, here and in the reader. */
@@ -156,7 +157,7 @@ function scopeAt(lines, text) {
        letter to satisfy the lookahead and claims the name anyway. */
     ["        fillFileContent : '3F00'H", "fillFileContent", ALT],
     ["        fillFileContent", "fillFileContent", KEY],
-    ["value1 ProfileElement ::= header : {", "value1", null],
+    ["value1 ProfileElement ::= header : {", "value1", "variable.other.constant"],
     ["value1 ProfileElement ::= header : {", "ProfileElement", "entity.name.class"],
     ["    -- major-version 2", "major-version", "comment.line"],
   ];
@@ -199,10 +200,7 @@ function scopeAt(lines, text) {
     const kinds = [
       ["a type", "ProfileElement", "type"],
       ["a builtin", "NULL", "type"],
-      /* Module syntax, and it stays plain. Listed so that colouring it again
-         fails here: variable.other.constant and variable.other.enummember
-         are one colour, and the two words share the assignment line. */
-      ["the reference", "value1", "syntax"],
+      ["the reference", "value1", "reference"],
       ["an alternative", "header", "alternative"],
       ["a member", "profileType", "member"],
       ["a number", "2", "literal"],
@@ -220,19 +218,18 @@ function scopeAt(lines, text) {
         if (aName >= bName || a.family === b.family) continue;
         const d = apart(a.col, b.col);
         /*
-         * A member renders exactly as the theme renders a TypeScript property
-         * -- the anchor check below asserts the equality, not merely
-         * closeness -- and the 2026 themes put property names at or near the
-         * foreground on purpose: Terraform attributes and TypeScript keys
-         * read that way there too. So member-against-plain is the theme's own
-         * convention, not a defect, and it is the one pair excused. Every
-         * other pair, member against string above all, must keep its
-         * distance.
+         * The reference and the alternative are identical on purpose: every
+         * default theme bundles variable.other.constant with
+         * variable.other.enummember into one rule, which is why `const a =
+         * Color.Red` is one blue in TypeScript. The pair is excused only
+         * while the theme keeps them equal -- the moment a theme separates
+         * them, the distance rule applies again.
          */
-        const convention =
-          (aName === "a member" && b.family === "syntax") ||
-          (bName === "a member" && a.family === "syntax");
-        const bad = d < 40 && !convention;
+        const bundled =
+          ((aName === "the reference" && b.family === "alternative") ||
+           (bName === "the reference" && a.family === "alternative")) &&
+          a.col === b.col;
+        const bad = d < 40 && !bundled;
         if (bad)
           console.log(`FAIL ${String(d).padStart(3)} apart` +
             ` ${aName} ${a.col} and ${bName} ${b.col}`);
@@ -281,11 +278,14 @@ function scopeAt(lines, text) {
      * This is what replaces colour engineering: the theme owns the colour,
      * we own the kind.
      */
-    {
-      const anchor = c(["source.ts", "variable.other.property"]);
-      const member = at.get("a member").col;
-      const same = anchor === member;
-      console.log(`${same ? "ok  " : "FAIL"} a member is this theme's TypeScript property colour (${member})`);
+    for (const [what, kind, probe] of [
+      ["a member", "property", ["source.ts", "variable.other.property"]],
+      ["the reference", "const", ["source.ts", "variable.other.constant"]],
+    ]) {
+      const anchor = c(probe);
+      const got = at.get(what).col;
+      const same = anchor === got;
+      console.log(`${same ? "ok  " : "FAIL"} ${what} is this theme's TypeScript ${kind} colour (${got})`);
       same ? ok++ : failed++;
     }
 

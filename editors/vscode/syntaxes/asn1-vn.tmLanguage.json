@@ -97,9 +97,12 @@
       "name": "entity.other.attribute-name.tag.asn1"
     },
     "assignment-head": {
-      "comment": "X.680 16.1: valuereference Type ::= Value. The reference is lower case and the type upper case, which is grammar and not convention. It is left uncoloured on purpose: it is module syntax around the value and not part of it, and euicc steps over it when reading. Listed before #alternative and #fieldname, which would otherwise claim the reference, since all three match at the same offset and the earlier rule wins.",
+      "comment": "X.680 16.1: valuereference Type ::= Value. The reference is a declared constant's name -- `const value1: ProfileElement =` is the same statement -- so it carries the constant kind and renders as each theme renders a TypeScript const. That makes it the colour of the alternative beside it, and that identity is the themes' own: every default theme bundles variable.other.constant and variable.other.enummember into one rule, which is why `const a = Color.Red` is one blue in TypeScript. An earlier version left the reference plain to dodge exactly that pair, which was a distance gate applied against the themes' stated intent. Listed before #alternative and #fieldname, which would otherwise claim the reference, since all three match at the same offset and the earlier rule wins.",
       "match": "(?<![-\\w])([a-z][A-Za-z0-9-]*)(\\s+)([A-Z][A-Za-z0-9-]*)(\\s*)(::=)",
       "captures": {
+        "1": {
+          "name": "variable.other.constant.asn1"
+        },
         "3": {
           "name": "entity.name.class.asn1"
         },
