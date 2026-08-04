@@ -491,7 +491,7 @@ cmd_check(const char *in, int as_text, const char *rules, const char *skel,
  * side and bytes on the other.
  */
 static int
-cmd_diff(const char *a_path, const char *b_path) {
+cmd_diff(const char *a_path, const char *b_path, int as_json) {
     if(!a_path || !b_path) {
         fprintf(stderr, "euicc: diff needs two files\n");
         return 2;
@@ -500,13 +500,18 @@ cmd_diff(const char *a_path, const char *b_path) {
     ProfileElement_t *a[MAX_PE], *b[MAX_PE];
     int a_lines[MAX_PE], b_lines[MAX_PE];
     size_t alen = 0, blen = 0;
-    int rc = 1;
+    /*
+     * The exit code is the answer, so a CI gate needs no parsing: 0 no
+     * difference, 1 a difference, 2 could not compare. Failing to read a
+     * file used to exit 1, indistinguishable from "the packages differ".
+     */
+    int rc = 2;
     xmlDocPtr ax = NULL, bx = NULL;
 
     unsigned char *abuf = slurp(a_path, &alen);
-    if(!abuf) return 1;
+    if(!abuf) return 2;
     unsigned char *bbuf = slurp(b_path, &blen);
-    if(!bbuf) { free(abuf); return 1; }
+    if(!bbuf) { free(abuf); return 2; }
 
     int an = read_package(abuf, alen, looks_like_text(abuf, alen), a, a_lines, MAX_PE);
     if(an < 0) {
@@ -526,9 +531,12 @@ cmd_diff(const char *a_path, const char *b_path) {
         goto done;
     }
 
-    printf("%s against %s:\n\n", a_path, b_path);
-    rc = diff_report((struct ProfileElement **)a, an, ax,
-                     (struct ProfileElement **)b, bn, bx) < 0 ? 1 : 0;
+    if(!as_json) printf("%s against %s:\n\n", a_path, b_path);
+    {
+        int n = diff_report((struct ProfileElement **)a, an, ax,
+                            (struct ProfileElement **)b, bn, bx, as_json);
+        rc = n < 0 ? 2 : (n > 0 ? 1 : 0);
+    }
 
 done:
     if(ax) xmlFreeDoc(ax);
@@ -612,6 +620,78 @@ cmd_fmt_check(const char *paths[], int npaths) {
     return differs;
 }
 
+/*
+ * completion: a script for the shell, to stdout. Static text on purpose --
+ * generating it from the option table would be machinery for eight commands
+ * and a dozen flags -- and a test holds it to usage(): every command and
+ * every flag the usage names must appear in both scripts, so the two cannot
+ * drift apart without a red run.
+ */
+static int
+cmd_completion(const char *shell) {
+    if(shell && !strcmp(shell, "zsh")) {
+        fputs(
+"#compdef euicc\n"
+"_euicc() {\n"
+"  local -a cmds\n"
+"  cmds=(\n"
+"    'build:value notation in, DER out'\n"
+"    'show:DER in, value notation out'\n"
+"    'check:either in, a verdict out'\n"
+"    'diff:what separates a source file from a package'\n"
+"    'schema:the schema as JSON, for an editor'\n"
+"    'fmt:value notation laid out, one member to a line'\n"
+"    'version:what this binary is'\n"
+"    'completion:a completion script for zsh or bash'\n"
+"  )\n"
+"  if (( CURRENT == 2 )); then\n"
+"    _describe -t commands 'euicc command' cmds\n"
+"    return\n"
+"  fi\n"
+"  case $words[2] in\n"
+"    completion) _values 'shell' zsh bash ;;\n"
+"    *) _arguments -s \\\n"
+"         '-o[write here instead of to stdout]:file:_files' \\\n"
+"         '-t[the input is value notation]' \\\n"
+"         '-b[the input is DER or BER]' \\\n"
+"         '-a[show: add X.680 comments]' \\\n"
+"         '-s[check: a warning fails the run too]' \\\n"
+"         '-w[fmt: write the file back]' \\\n"
+"         '-l[fmt: list the files whose layout differs]' \\\n"
+"         '--json[check, diff: one JSON object]' \\\n"
+"         '--no-rules[check: without the rule set]' \\\n"
+"         '--rules[the rule set]:directory:_files -/' \\\n"
+"         '--skel[the ISO Schematron transforms]:directory:_files -/' \\\n"
+"         '*:file:_files' ;;\n"
+"  esac\n"
+"}\n"
+"_euicc \"$@\"\n", stdout);
+        return 0;
+    }
+    if(shell && !strcmp(shell, "bash")) {
+        fputs(
+"_euicc() {\n"
+"  local cur=\"${COMP_WORDS[COMP_CWORD]}\"\n"
+"  if [ \"$COMP_CWORD\" -eq 1 ]; then\n"
+"    COMPREPLY=($(compgen -W \"build show check diff schema fmt version completion\" -- \"$cur\"))\n"
+"    return\n"
+"  fi\n"
+"  if [ \"${COMP_WORDS[1]}\" = completion ]; then\n"
+"    COMPREPLY=($(compgen -W \"zsh bash\" -- \"$cur\"))\n"
+"    return\n"
+"  fi\n"
+"  case \"$cur\" in\n"
+"    -*) COMPREPLY=($(compgen -W \"-o -t -b -a -s -w -l --json --no-rules --rules --skel\" -- \"$cur\")) ;;\n"
+"    *)  COMPREPLY=($(compgen -f -- \"$cur\")) ;;\n"
+"  esac\n"
+"}\n"
+"complete -F _euicc euicc\n", stdout);
+        return 0;
+    }
+    fprintf(stderr, "euicc: completion takes zsh or bash\n");
+    return 2;
+}
+
 /* ---- entry --------------------------------------------------------------- */
 
 static void
@@ -627,6 +707,7 @@ usage(void) {
         "  schema   the schema as JSON, for an editor\n"
         "  fmt      value notation laid out, one member to a line\n"
         "  version  what this binary is, for a bug report or an editor\n"
+        "  completion  a completion script for zsh or bash, to stdout\n"
         "\n"
         "options:\n"
         "  -o FILE     write here instead of to stdout\n"
@@ -637,13 +718,15 @@ usage(void) {
         "  -l          fmt: list the files whose layout differs, and say so in\n"
         "              the exit code -- what a pre-commit hook or CI runs\n"
         "  -s          check: a warning fails the run too\n"
-        "  --json      check: one JSON object, for an editor or a script\n"
+        "  --json      check, diff: one JSON object, for an editor or a script\n"
         "  --no-rules  check: the reader and the constraints, without the rule set\n"
 
         "  --rules DIR the rule set, default " EUICC_RULES_DIR "\n"
         "  --skel DIR  the ISO Schematron transforms\n"
         "\n"
-        "Without -t or -b the input is read as value notation when it is text.\n",
+        "Without -t or -b the input is read as value notation when it is text.\n"
+        "diff and fmt -l answer in the exit code: 0 no difference, 1 a\n"
+        "difference, 2 the question could not be answered.\n",
         stderr);
 }
 
@@ -690,11 +773,12 @@ main(int argc, char **argv) {
     if(!strcmp(cmd, "build")) rc = cmd_build(in, out, as_text);
     else if(!strcmp(cmd, "show")) rc = cmd_show(in, as_text, annotated);
     else if(!strcmp(cmd, "check")) rc = cmd_check(in, as_text, rules, skel, strict, as_json, no_rules);
-    else if(!strcmp(cmd, "diff")) rc = cmd_diff(second, in);
+    else if(!strcmp(cmd, "diff")) rc = cmd_diff(second, in, as_json);
     else if(!strcmp(cmd, "schema")) rc = cmd_schema(stdout);
     else if(!strcmp(cmd, "fmt")) rc = list_only
         ? cmd_fmt_check(files, nfiles)
         : cmd_fmt(in, in_place);
+    else if(!strcmp(cmd, "completion")) rc = cmd_completion(in);
     else if(!strcmp(cmd, "version")) {
         printf("euicc %s (%s)\n", EUICC_VERSION, EUICC_GITSHA);
         rc = 0;

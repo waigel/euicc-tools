@@ -56,12 +56,15 @@ void sch_result_free(sch_result_t *res);
 /* ---- diff ---------------------------------------------------------------- */
 
 /*
- * What separates two packages. Prints the difference and returns how many
- * elements differ, or -1 on a failure.
+ * What separates two packages, as text or as one JSON object. Returns how
+ * many differences there are -- a pure reordering counts as one, because a
+ * package whose elements all match can still be a different package -- or -1
+ * on a failure.
  */
 struct ProfileElement;
 int diff_report(struct ProfileElement **want, int want_n, xmlDocPtr want_xml,
-                struct ProfileElement **have, int have_n, xmlDocPtr have_xml);
+                struct ProfileElement **have, int have_n, xmlDocPtr have_xml,
+                int as_json);
 
 /* ---- schema -------------------------------------------------------------- */
 

@@ -48,7 +48,7 @@ ASN     := $(EPT)/profile-3.4.1.asn
 # The number is what the language server compares against its minimum, so it
 # moves when the CLI's surface does. The commit is for a bug report, and a
 # build outside a checkout says so instead of inventing one.
-VERSION := 1.0
+VERSION := 1.1
 GITSHA  := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 
 DEF := -DEUICC_RULES_DIR='"$(abspath $(RULES))"' \

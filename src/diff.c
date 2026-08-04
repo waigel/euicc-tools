@@ -122,6 +122,24 @@ find(diff_side_t *s, const char *key) {
 }
 
 /* A key reads better as "kind, identification 7" than as "kind#7". */
+/* One element as a JSON object member. The key is "kind#id"; the id is
+   emitted only where the element has one. */
+static void
+json_item(const char *key, int *first) {
+    const char *hash = strchr(key, '#');
+    printf("%s\n  {\"element\": \"", *first ? "" : ",");
+    *first = 0;
+    if(hash) printf("%.*s", (int)(hash - key), key);
+    else printf("%s", key);
+    putchar('"');
+    if(hash && hash[1]) printf(", \"identification\": \"%s\"", hash + 1);
+}
+
+static int
+differs(const diff_item_t *a, const diff_item_t *b) {
+    return a->der_len != b->der_len || memcmp(a->der, b->der, a->der_len) != 0;
+}
+
 static void
 print_key(const char *key) {
     const char *hash = strchr(key, '#');
@@ -132,7 +150,8 @@ print_key(const char *key) {
 
 int
 diff_report(struct ProfileElement **want_, int want_n, xmlDocPtr want_xml,
-            struct ProfileElement **have_, int have_n, xmlDocPtr have_xml) {
+            struct ProfileElement **have_, int have_n, xmlDocPtr have_xml,
+            int as_json) {
     ProfileElement_t **want = (ProfileElement_t **)want_;
     ProfileElement_t **have = (ProfileElement_t **)have_;
     diff_side_t w = {0}, h = {0};
@@ -144,31 +163,69 @@ diff_report(struct ProfileElement **want_, int want_n, xmlDocPtr want_xml,
 
     int added = 0, removed = 0, changed = 0, same = 0;
 
-    for(int i = 0; i < w.count; i++) {
-        diff_item_t *a = &w.items[i];
-        diff_item_t *b = find(&h, a->key);
-        if(!b) {
-            printf("  + ");
-            print_key(a->key);
-            printf("  (%zu bytes)\n", a->der_len);
+    if(as_json) {
+        /*
+         * The same walk as the text report, grouped by category because JSON
+         * keys group. The counts fall out of the passes, so the two reports
+         * cannot disagree about them.
+         */
+        int first = 1;
+        printf("{\n \"added\": [");
+        for(int i = 0; i < w.count; i++) {
+            if(find(&h, w.items[i].key)) continue;
+            json_item(w.items[i].key, &first);
+            printf(", \"bytes\": %zu}", w.items[i].der_len);
             added++;
-        } else if(a->der_len != b->der_len
-                  || memcmp(a->der, b->der, a->der_len) != 0) {
-            printf("  ~ ");
-            print_key(a->key);
-            printf("  (%zu -> %zu bytes)\n", b->der_len, a->der_len);
-            changed++;
-        } else {
-            same++;
         }
-    }
-
-    for(int i = 0; i < h.count; i++) {
-        if(!find(&w, h.items[i].key)) {
-            printf("  - ");
-            print_key(h.items[i].key);
-            printf("  (%zu bytes)\n", h.items[i].der_len);
+        printf("%s],\n \"changed\": [", first ? "" : "\n ");
+        first = 1;
+        for(int i = 0; i < w.count; i++) {
+            diff_item_t *b = find(&h, w.items[i].key);
+            if(!b) continue;
+            if(differs(&w.items[i], b)) {
+                json_item(w.items[i].key, &first);
+                printf(", \"from\": %zu, \"to\": %zu}",
+                       b->der_len, w.items[i].der_len);
+                changed++;
+            } else {
+                same++;
+            }
+        }
+        printf("%s],\n \"removed\": [", first ? "" : "\n ");
+        first = 1;
+        for(int i = 0; i < h.count; i++) {
+            if(find(&w, h.items[i].key)) continue;
+            json_item(h.items[i].key, &first);
+            printf(", \"bytes\": %zu}", h.items[i].der_len);
             removed++;
+        }
+        printf("%s],\n", first ? "" : "\n ");
+    } else {
+        for(int i = 0; i < w.count; i++) {
+            diff_item_t *a = &w.items[i];
+            diff_item_t *b = find(&h, a->key);
+            if(!b) {
+                printf("  + ");
+                print_key(a->key);
+                printf("  (%zu bytes)\n", a->der_len);
+                added++;
+            } else if(differs(a, b)) {
+                printf("  ~ ");
+                print_key(a->key);
+                printf("  (%zu -> %zu bytes)\n", b->der_len, a->der_len);
+                changed++;
+            } else {
+                same++;
+            }
+        }
+
+        for(int i = 0; i < h.count; i++) {
+            if(!find(&w, h.items[i].key)) {
+                printf("  - ");
+                print_key(h.items[i].key);
+                printf("  (%zu bytes)\n", h.items[i].der_len);
+                removed++;
+            }
         }
     }
 
@@ -181,16 +238,22 @@ diff_report(struct ProfileElement **want_, int want_n, xmlDocPtr want_xml,
     if(added == 0 && removed == 0) {
         for(int i = 0; i < w.count && i < h.count; i++)
             if(strcmp(w.items[i].key, h.items[i].key) != 0) reordered = 1;
-        if(reordered) printf("  ! the elements are in a different order\n");
+        if(reordered && !as_json)
+            printf("  ! the elements are in a different order\n");
     }
 
-    if(!added && !removed && !changed && !reordered)
-        printf("  no difference\n");
+    int total = added + changed + removed + reordered;
 
-    printf("\n%d added, %d changed, %d removed, %d unchanged\n",
-           added, changed, removed, same);
+    if(as_json) {
+        printf(" \"reordered\": %s,\n \"unchanged\": %d,\n \"same\": %s\n}\n",
+               reordered ? "true" : "false", same, total ? "false" : "true");
+    } else {
+        if(!total) printf("  no difference\n");
+        printf("\n%d added, %d changed, %d removed, %d unchanged\n",
+               added, changed, removed, same);
+    }
 
     side_free(&w);
     side_free(&h);
-    return added + changed + removed + reordered;
+    return total;
 }

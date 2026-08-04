@@ -345,5 +345,57 @@ lst=$("$E" fmt -l "$tmp/canon2.vn" "$tmp/messy.vn" 2>/dev/null)
 [ $? -eq 2 ] && ok "fmt -l: an unreadable file is exit 2, not a verdict" \
              || bad "fmt -l: an unreadable file is exit 2, not a verdict"
 
+# diff answers in the exit code -- 0 no difference, 1 a difference, 2 could
+# not compare -- so a CI gate needs no parsing. Failing to read a file used to
+# exit 1, indistinguishable from "the packages differ".
+"$E" diff "$tmp/good.vn" "$tmp/good.der" >/dev/null 2>&1
+[ $? -eq 0 ] && ok "diff: no difference is exit 0" || bad "diff: no difference is exit 0"
+"$E" diff "$tmp/v4.vn" "$tmp/good.der" >/dev/null 2>&1
+[ $? -eq 1 ] && ok "diff: a difference is exit 1" || bad "diff: a difference is exit 1"
+"$E" diff "$tmp/bad.vn" "$tmp/good.der" >/dev/null 2>&1
+[ $? -eq 1 ] && ok "diff: a reordering alone is exit 1" || bad "diff: a reordering alone is exit 1"
+"$E" diff /nonexistent "$tmp/good.der" >/dev/null 2>&1
+[ $? -eq 2 ] && ok "diff: a missing file is exit 2, not a verdict" \
+             || bad "diff: a missing file is exit 2, not a verdict"
+"$E" diff "$tmp/unknown.vn" "$tmp/good.der" >/dev/null 2>&1
+[ $? -eq 2 ] && ok "diff: an unreadable source is exit 2, not a verdict" \
+             || bad "diff: an unreadable source is exit 2, not a verdict"
+
+"$E" diff --json "$tmp/good.vn" "$tmp/good.der" 2>/dev/null | grep -q '"same": true' \
+  && ok "diff --json: agreement says so" || bad "diff --json: agreement says so"
+out=$("$E" diff --json "$tmp/v4.vn" "$tmp/good.der" 2>/dev/null)
+echo "$out" | grep -q '"same": false' \
+  && echo "$out" | grep -q '"element": "header"' \
+  && ok "diff --json: a change names its element" \
+  || bad "diff --json: a change names its element"
+
+# completion: the scripts must track usage(). Every command and flag the usage
+# names has to appear in both, so neither can drift without a red run here.
+"$E" 2>&1 | sed -n 's/^  \([a-z][a-z-]*\)  .*/\1/p' | sort -u > "$tmp/cmds"
+"$E" 2>&1 | sed -n 's/^  \(--*[a-z][a-z-]*\).*/\1/p' | sort -u > "$tmp/flags"
+[ -s "$tmp/cmds" ] && [ -s "$tmp/flags" ] \
+  && ok "completion: usage yields commands and flags to hold the scripts to" \
+  || bad "completion: usage yields commands and flags to hold the scripts to"
+for sh in zsh bash; do
+  "$E" completion "$sh" > "$tmp/comp.$sh" 2>/dev/null \
+    && ok "completion: $sh script is produced" || bad "completion: $sh script is produced"
+  missing=""
+  while read -r w; do
+    grep -q -- "$w" "$tmp/comp.$sh" || missing="$missing $w"
+  done < "$tmp/cmds"
+  while read -r w; do
+    grep -q -- "$w" "$tmp/comp.$sh" || missing="$missing $w"
+  done < "$tmp/flags"
+  [ -z "$missing" ] && ok "completion: the $sh script knows every command and flag" \
+                    || bad "completion: the $sh script is missing$missing"
+done
+command -v zsh >/dev/null && { zsh -n "$tmp/comp.zsh" \
+  && ok "completion: zsh parses its script" || bad "completion: zsh parses its script"; }
+command -v bash >/dev/null && { bash -n "$tmp/comp.bash" \
+  && ok "completion: bash parses its script" || bad "completion: bash parses its script"; }
+"$E" completion fish >/dev/null 2>&1
+[ $? -eq 2 ] && ok "completion: an unknown shell is refused" \
+             || bad "completion: an unknown shell is refused"
+
 printf '\n%d ok, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
