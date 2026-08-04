@@ -134,14 +134,22 @@ names and from nothing else.
 
 ## Formatting
 
-One member to a line, indented by depth. Nothing is moved but whitespace, and
-the guarantee is the token list: after a pass, the identifiers, literals and
-comments are the same ones in the same order.
+`euicc fmt`, which the extension calls. One member to a line, indented by
+depth. Nothing is moved but whitespace, and the guarantee is the token list:
+after a pass, the identifiers, literals and comments are the same ones in the
+same order, or the file is returned untouched.
+
+It is in the tool and not in the extension for the reason everything else here
+is: a second reading of the language is a second thing that can disagree with
+the first. It was in the extension once, in TypeScript, and that duplicate
+shortened a string running over two lines while its own check said nothing had
+moved. The same command is what a pre-commit hook or CI would run.
 
 `euicc show` writes canonical value notation and looks like a formatter until
 you notice it re-serialises a decoded value: every comment is gone and
 `myHeader ProfileElement ::=` comes back as `value1`. Format on save would
-delete documentation without a word, so this reads the text instead.
+delete documentation without a word, so `fmt` reads the text instead -- which
+also means it works on a file the reader rejects, the file most in need of it.
 
 Two things it settles by matching the writer. A long hex string wrapped over
 lines is left as the writer laid it out -- X.680 12.12 ignores the whitespace

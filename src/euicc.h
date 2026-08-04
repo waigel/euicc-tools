@@ -71,4 +71,17 @@ int diff_report(struct ProfileElement **want, int want_n, xmlDocPtr want_xml,
  */
 int cmd_schema(FILE *f);
 
+/* ---- format -------------------------------------------------------------- */
+
+/*
+ * Value notation laid out, one member to a line. The caller frees it. On a
+ * refusal it returns NULL and sets *why, which is a static string.
+ *
+ * It reads text and never goes through the writer: `euicc show` re-serialises a
+ * decoded value and every comment in the file is gone. The guarantee is that
+ * the token list is unchanged, checked here, and a file whose tokens would move
+ * is returned untouched.
+ */
+char *fmt_layout(const char *text, size_t len, const char *unit, char **why);
+
 #endif /* EUICC_H */

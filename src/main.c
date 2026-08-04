@@ -511,6 +511,45 @@ done:
     return rc;
 }
 
+/*
+ * fmt reads text and writes text. It never touches the codec, the schema or the
+ * rule set, so it works on a file that does not parse -- which is the file most
+ * in need of laying out.
+ */
+static int
+cmd_fmt(const char *in, int in_place) {
+    if(in_place && !in) {
+        fprintf(stderr, "euicc: -w needs a file\n");
+        return 2;
+    }
+    size_t len = 0;
+    unsigned char *buf = slurp(in, &len);
+    if(!buf) return 1;
+
+    char *why = NULL;
+    char *out = fmt_layout((const char *)buf, len, "    ", &why);
+    free(buf);
+    if(!out) {
+        fprintf(stderr, "euicc: %s\n", why ? why : "cannot lay out this file");
+        return 1;
+    }
+
+    if(in_place) {
+        FILE *f = fopen(in, "wb");
+        if(!f) {
+            fprintf(stderr, "euicc: cannot write %s\n", in);
+            free(out);
+            return 1;
+        }
+        fputs(out, f);
+        fclose(f);
+    } else {
+        fputs(out, stdout);
+    }
+    free(out);
+    return 0;
+}
+
 /* ---- entry --------------------------------------------------------------- */
 
 static void
@@ -524,12 +563,14 @@ usage(void) {
         "  check    either in, a verdict out\n"
         "  diff     what separates a source file from a package\n"
         "  schema   the schema as JSON, for an editor\n"
+        "  fmt      value notation laid out, one member to a line\n"
         "\n"
         "options:\n"
         "  -o FILE     write here instead of to stdout\n"
         "  -t          the input is value notation\n"
         "  -b          the input is DER or BER\n"
         "  -a          show: add X.680 comments\n"
+        "  -w          fmt: write the file back instead of to stdout\n"
         "  -s          check: a warning fails the run too\n"
         "  --json      check: one JSON object, for an editor or a script\n"
 
@@ -547,7 +588,7 @@ main(int argc, char **argv) {
     const char *cmd = argv[1];
     const char *in = NULL, *out = NULL;
     const char *rules = EUICC_RULES_DIR, *skel = EUICC_SKEL_DIR;
-    int as_text = -1, annotated = 0, strict = 0, as_json = 0;
+    int as_text = -1, annotated = 0, strict = 0, as_json = 0, in_place = 0;
     const char *second = NULL;
 
     for(int i = 2; i < argc; i++) {
@@ -557,6 +598,7 @@ main(int argc, char **argv) {
         else if(!strcmp(argv[i], "-t")) as_text = 1;
         else if(!strcmp(argv[i], "-b")) as_text = 0;
         else if(!strcmp(argv[i], "-a")) annotated = 1;
+        else if(!strcmp(argv[i], "-w")) in_place = 1;
         else if(!strcmp(argv[i], "-s")) strict = 1;
         else if(!strcmp(argv[i], "--json")) as_json = 1;
 
@@ -575,6 +617,7 @@ main(int argc, char **argv) {
     else if(!strcmp(cmd, "check")) rc = cmd_check(in, as_text, rules, skel, strict, as_json);
     else if(!strcmp(cmd, "diff")) rc = cmd_diff(second, in);
     else if(!strcmp(cmd, "schema")) rc = cmd_schema(stdout);
+    else if(!strcmp(cmd, "fmt")) rc = cmd_fmt(in, in_place);
     else { usage(); rc = 2; }
 
     xsltCleanupGlobals();

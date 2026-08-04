@@ -47,8 +47,6 @@ import {
   classify,
   declarationLine,
   describe,
-  layout,
-  tokens,
   memberAt,
   readableType,
   Schema,
@@ -223,6 +221,30 @@ function runEuicc(text: string): { done: Promise<Report | string>; kill: () => v
     child.stdin?.end(text, "utf8");
   });
   return { done, kill: () => child?.kill() };
+}
+
+/*
+ * euicc, with the buffer on standard input and its output as text. Used by the
+ * commands whose answer is not JSON.
+ */
+function runEuiccText(args: string[], text: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const child = execFile(
+      settings.path,
+      args,
+      { timeout: 20000, maxBuffer: 32 << 20 },
+      (err, stdout, stderr) => {
+        if (err || !stdout) {
+          const why = (stderr || "").trim() || err?.message || "no output";
+          connection.console.warn(`euicc ${args.join(" ")}: ${why}`);
+          resolve(null);
+          return;
+        }
+        resolve(stdout);
+      }
+    );
+    child.stdin?.end(text, "utf8");
+  });
 }
 
 /*
@@ -599,27 +621,14 @@ connection.onHover(async (params) => {
  * One edit per line whose indentation is wrong, and nothing else. See
  * indentation() for why this does not go through `euicc show`.
  */
-connection.onDocumentFormatting((params): TextEdit[] => {
+connection.onDocumentFormatting(async (params): Promise<TextEdit[]> => {
   const doc = documents.get(params.textDocument.uri);
   if (!doc || doc.languageId !== "asn1-vn") return [];
+  if (settingsReady) await settingsReady;
 
   const before = doc.getText();
-  const unit = params.options.insertSpaces
-    ? " ".repeat(Math.max(1, params.options.tabSize))
-    : "\t";
-  const after = layout(before, unit);
-  if (after === before) return [];
-
-  /*
-   * The guarantee, checked here and not only in a test: whatever the layout
-   * moves, the text with every run of whitespace collapsed is the same. If it
-   * is not, the file is returned untouched -- a formatter that loses a comment
-   * is worse than one that does nothing.
-   */
-  if (tokens(after).join("\u0000") !== tokens(before).join("\u0000")) {
-    connection.console.warn("euicc: formatting would have changed the file, so it did not");
-    return [];
-  }
+  const after = await runEuiccText(["fmt"], before);
+  if (typeof after !== "string" || after === before) return [];
 
   const end = doc.positionAt(before.length);
   return [{ range: { start: { line: 0, character: 0 }, end }, newText: after }];

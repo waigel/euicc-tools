@@ -206,5 +206,79 @@ printf '%s\n    mf { { fileDescriptor : { securityAttributesReferenced %s2F0601%
   && ok "an element wrapped in braces is refused" \
   || bad "an element wrapped in braces is refused"
 
+# fmt. It reads text and never goes through the writer, because `euicc show`
+# re-serialises a decoded value and every comment in the file is gone. What it
+# may not change is the token list, and that is what these check.
+cat > "$tmp/messy.vn" <<'VN'
+-- a header comment
+myHeader ProfileElement ::= mf : {
+    mf-header { mandated NULL, identification 1 },ef-dir {
+        fileDescriptor : {
+fileDescriptor '4221'H,      -- linear fixed, so four bytes
+            fileID '2F00'H
+        }
+    }
+}
+VN
+"$E" fmt "$tmp/messy.vn" > "$tmp/laid.vn" 2>/dev/null
+
+grep -q '^    ef-dir {$' "$tmp/laid.vn" \
+  && ok "fmt: a member after a closing brace starts a line" \
+  || bad "fmt: a member after a closing brace starts a line"
+grep -q '^        mandated NULL,$' "$tmp/laid.vn" \
+  && ok "fmt: two members on one line become two" \
+  || bad "fmt: two members on one line become two"
+grep -q "^-- a header comment$" "$tmp/laid.vn" \
+  && ok "fmt: a comment survives" || bad "fmt: a comment survives"
+grep -q "linear fixed, so four bytes" "$tmp/laid.vn" \
+  && ok "fmt: a trailing comment stays on its line" \
+  || bad "fmt: a trailing comment stays on its line"
+grep -q "myHeader" "$tmp/laid.vn" \
+  && ok "fmt: the value reference keeps its name" \
+  || bad "fmt: the value reference keeps its name"
+"$E" fmt "$tmp/laid.vn" 2>/dev/null | cmp -s - "$tmp/laid.vn" \
+  && ok "fmt: laying out twice is the same as once" \
+  || bad "fmt: laying out twice is the same as once"
+
+# A cstring is text and every character of one counts. X.680 12.11 and 12.12
+# say the whitespace inside an hstring or a bstring is not, which is why a
+# wrapped one may be reflowed and this may not.
+printf 'value1 ProfileElement ::= header : {\n    profileType "first line   \nsecond line",\n    major-version 2\n}\n' \
+  > "$tmp/cstr.vn"
+"$E" fmt "$tmp/cstr.vn" 2>/dev/null | grep -q 'first line   $' \
+  && ok "fmt: a string over lines is not shortened" \
+  || bad "fmt: a string over lines is not shortened"
+
+# An OBJECT IDENTIFIER is a brace list of arcs and the writer keeps it on one
+# line. Breaking them put ninety extra lines in a published profile.
+printf 'value1 ProfileElement ::= header : {\n eUICC-Mandatory-GFSTEList { { 2 23 143 1 2 1 } }\n}\n' \
+  > "$tmp/oid.vn"
+"$E" fmt "$tmp/oid.vn" 2>/dev/null | grep -q '{ 2 23 143 1 2 1 }' \
+  && ok "fmt: an object identifier stays on one line" \
+  || bad "fmt: an object identifier stays on one line"
+
+# The writer and the formatter have to agree on what canonical means.
+for d in "$root"/vendor/euicc-profile-tool/testdata/*.der; do
+  [ -f "$d" ] || continue
+  "$E" show "$d" 2>/dev/null > "$tmp/canon.vn"
+  "$E" fmt "$tmp/canon.vn" 2>/dev/null | cmp -s - "$tmp/canon.vn" \
+    && ok "fmt: the writer output of $(basename "$d" .der | cut -c1-24) is unchanged" \
+    || bad "fmt: the writer output of $(basename "$d" .der | cut -c1-24) is unchanged"
+  break
+done
+
+# It reads text, so it works on a file the reader rejects -- the file most in
+# need of laying out.
+printf 'value1 ProfileElement ::= header : {\nmajor-version nonsense\n}\n' > "$tmp/broken.vn"
+"$E" fmt "$tmp/broken.vn" 2>/dev/null | grep -q '^    major-version nonsense$' \
+  && ok "fmt: a file that does not parse is still laid out" \
+  || bad "fmt: a file that does not parse is still laid out"
+
+# -w writes the file back.
+cp "$tmp/messy.vn" "$tmp/inplace.vn"
+"$E" fmt -w "$tmp/inplace.vn" 2>/dev/null
+cmp -s "$tmp/inplace.vn" "$tmp/laid.vn" \
+  && ok "fmt: -w writes the file back" || bad "fmt: -w writes the file back"
+
 printf '\n%d ok, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -30,7 +30,7 @@ buildSync({
 });
 const {
   analyze, suggest, memberAt, declarationLine, assignmentLine, readableType,
-  classify, layout, tokens,
+  classify,
 } = require(out);
 
 const schema = JSON.parse(execFileSync(EUICC, ["schema"], { maxBuffer: 8 << 20 }));
@@ -293,108 +293,12 @@ if (decl("NoSuchType", "x") === null) {
   console.log("ok   an unknown type finds nothing"); pass++;
 } else { console.log("FAIL an unknown type finds nothing"); fail++; }
 
-/* ---- laying it out -------------------------------------------------------- */
-
 /*
- * One member to a line, indented by depth, and nothing moved but whitespace.
- *
- * `euicc show` writes canonical value notation and looks like a formatter until
- * you notice it re-serialises a decoded value: every comment is gone and
- * `myHeader ProfileElement ::=` comes back `value1`. Format on save would
- * delete documentation without a word, so this reads the text instead.
- *
- * The guarantee is the token list, not the whitespace. Comparing text with
- * whitespace collapsed fails on a break inserted where there was nothing --
- * `},ef-dir` becomes `}, ef-dir` -- and comparing it with whitespace removed
- * would not notice `major-version 2` becoming `major-version2`.
+ * Laying a file out is `euicc fmt` and is tested in tests/run-tests, where the
+ * code lives. It was here once, in a second lexer written in TypeScript, and
+ * that duplicate shortened a cstring running over two lines while its own check
+ * said nothing had moved.
  */
-const same = (a, b) => tokens(a).join("\u0000") === tokens(b).join("\u0000");
-
-{
-  const messy = [
-    "-- a header comment",
-    "myHeader ProfileElement ::= mf : {",
-    /* Two members and a nested block on one line, which is what prompted this. */
-    "    mf-header { mandated NULL, identification 1 },ef-dir {",
-    "        fileDescriptor : {",
-    "fileDescriptor '4221'H,      -- linear fixed, so 4 bytes",
-    "            fileID '2F00'H",
-    "        }",
-    "    }",
-    "}",
-  ].join("\n");
-  const got = layout(messy);
-  const lines = got.split("\n");
-  const checks = [
-    ["the tokens are the same", same(messy, got)],
-    ["laying out twice is the same as once", layout(got) === got],
-    ["a member after a closing brace starts a line",
-      lines.some((l) => l === "    ef-dir {")],
-    ["two members on one line become two lines",
-      lines.some((l) => l === "        mandated NULL,") &&
-      lines.some((l) => l === "        identification 1")],
-    ["a comment stays on the line it comments on",
-      lines.some((l) => /fileDescriptor '4221'H,\s+-- linear fixed/.test(l))],
-    ["the header comment is still there", lines[0] === "-- a header comment"],
-    ["the value reference keeps its name", got.includes("myHeader")],
-    ["no blank line is left where a break was made", !/\{\n\s*\n/.test(got)],
-  ];
-  for (const [what, okd] of checks) {
-    console.log(`${okd ? "ok  " : "FAIL"} ${what}`);
-    okd ? pass++ : fail++;
-  }
-}
-
-/*
- * A cstring is text and every character of one counts. X.680 12.11 and 12.12
- * say the whitespace inside an hstring or a bstring is not part of the value,
- * and an earlier version of tokens() applied that to a cstring as well -- so
- * the check went blind at exactly the place layout() was shortening one.
- */
-{
-  const src = [
-    "value1 ProfileElement ::= header : {",
-    '    profileType "first line   ',
-    'second line",',
-    "    major-version 2",
-    "}",
-  ].join("\n") + "\n";
-  const got = layout(src);
-  const inner = (t) => /"([\s\S]*?)"/.exec(t)[1];
-  for (const [what, okd] of [
-    ["a cstring over lines is not touched", inner(src) === inner(got)],
-    ["and its tokens compare equal", same(src, got)],
-    ["laying out twice is the same as once", layout(got) === got],
-  ]) {
-    console.log(`${okd ? "ok  " : "FAIL"} ${what}`);
-    okd ? pass++ : fail++;
-  }
-}
-
-/*
- * The writer's own output must come back unchanged, or the two disagree about
- * what canonical means. Two things it settled: an hstring wrapped over lines is
- * left as the writer laid it out, and an OBJECT IDENTIFIER stays on one line,
- * which is what `{ 2 23 143 1 2 1 }` is and why numbers-only groups are not
- * broken.
- */
-{
-  const der = path.join(__dirname, "..", "..", "..", "vendor", "euicc-profile-tool",
-    "testdata", "TS48 V7.0 eSIM_GTP_SAIP2.3_NoBERTLV.der");
-  if (!fs.existsSync(der)) {
-    console.log("skip  no published profile here, so the writer was not compared");
-  } else {
-    const real = execFileSync(EUICC, ["show", der], { maxBuffer: 8 << 20 }).toString();
-    const once = layout(real);
-    for (const [what, okd] of [
-      ["the writer's output is already laid out", real === once],
-      ["and its tokens survive a pass anyway", same(real, once)],
-    ]) {
-      console.log(`${okd ? "ok  " : "FAIL"} ${what}`);
-      okd ? pass++ : fail++;
-    }
-  }
-}
 
 /* ---- what each word is ---------------------------------------------------- */
 
