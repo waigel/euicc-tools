@@ -1,7 +1,7 @@
 {
   "name": "euicc-vn",
   "displayName": "eUICC profile packages",
-  "version": "0.22.0",
+  "version": "0.22.1",
   "description": "Write eUICC profile packages in ASN.1 value notation, with the rules checked as you save.",
   "publisher": "waigel",
   "license": "MIT",
