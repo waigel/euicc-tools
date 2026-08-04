@@ -13,7 +13,10 @@
 CC      ?= cc
 CFLAGS  ?= -O2 -g
 STD     := -std=c99
-WARN    := -Wall -Wextra -Wno-unused-parameter
+# An implicit declaration is the bug above waiting to happen again, so it is
+# an error and not a warning that scrolls past.
+WARN    := -Wall -Wextra -Wno-unused-parameter \
+           -Werror=implicit-function-declaration -Werror=int-conversion
 
 VENDOR  := vendor
 EPT     := $(VENDOR)/euicc-profile-tool
@@ -56,7 +59,12 @@ DEF := -DEUICC_RULES_DIR='"$(abspath $(RULES))"' \
        -DEUICC_SCHEMA_FILE='"$(abspath $(ASN))"' \
        -DEUICC_VERSION='"$(VERSION)"' -DEUICC_GITSHA='"$(GITSHA)"'
 
-EXTRA :=
+# -std=c99 makes glibc hide everything younger than C89: strdup, getline,
+# glob and timegm lose their declarations, an implicit declaration returns
+# int, and an int truncates a 64-bit pointer. On Linux that was a segfault in
+# `euicc check`. macOS never showed it, because _DARWIN_C_SOURCE reveals
+# everything there; _DEFAULT_SOURCE is the glibc counterpart.
+EXTRA := -D_DEFAULT_SOURCE
 ifeq ($(shell uname -s),Darwin)
 # asn1c's GeneralizedTime.c needs struct tm and timegm.
 EXTRA += -D_DARWIN_C_SOURCE
