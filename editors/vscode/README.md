@@ -155,7 +155,8 @@ It is in the tool and not in the extension for the reason everything else here
 is: a second reading of the language is a second thing that can disagree with
 the first. It was in the extension once, in TypeScript, and that duplicate
 shortened a string running over two lines while its own check said nothing had
-moved. The same command is what a pre-commit hook or CI would run.
+moved. `euicc fmt -l *.vn` is the pre-commit and CI form: it names the files
+whose layout differs and answers in the exit code, writing nothing.
 
 `euicc show` writes canonical value notation and looks like a formatter until
 you notice it re-serialises a decoded value: every comment is gone and

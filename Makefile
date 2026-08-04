@@ -45,9 +45,16 @@ INC := -Isrc -I$(VN)/include -I$(VN)/src -I$(SKELDIR) $(XML_CFLAGS)
 # from this file.
 ASN     := $(EPT)/profile-3.4.1.asn
 
+# The number is what the language server compares against its minimum, so it
+# moves when the CLI's surface does. The commit is for a bug report, and a
+# build outside a checkout says so instead of inventing one.
+VERSION := 1.0
+GITSHA  := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+
 DEF := -DEUICC_RULES_DIR='"$(abspath $(RULES))"' \
        -DEUICC_SKEL_DIR='"$(SKEL)"' \
-       -DEUICC_SCHEMA_FILE='"$(abspath $(ASN))"'
+       -DEUICC_SCHEMA_FILE='"$(abspath $(ASN))"' \
+       -DEUICC_VERSION='"$(VERSION)"' -DEUICC_GITSHA='"$(GITSHA)"'
 
 EXTRA :=
 ifeq ($(shell uname -s),Darwin)

@@ -31,6 +31,12 @@
  */
 extern const vn_annotations_t vn_generated_annotations;
 
+#ifndef EUICC_VERSION
+#define EUICC_VERSION "0.0"
+#endif
+#ifndef EUICC_GITSHA
+#define EUICC_GITSHA "unknown"
+#endif
 #ifndef EUICC_RULES_DIR
 #define EUICC_RULES_DIR "vendor/saip-validator/rules"
 #endif
@@ -571,6 +577,41 @@ cmd_fmt(const char *in, int in_place) {
     return 0;
 }
 
+/*
+ * fmt -l: which files are not laid out. The exit code is the answer -- 0 when
+ * every file already has the canonical layout, 1 when at least one does not,
+ * 2 when a file could not be read at all -- so a pre-commit hook or CI needs
+ * no diffing of its own, the same contract `terraform fmt -check` gives.
+ * Nothing is written; the names of the offending files go to stdout.
+ */
+static int
+cmd_fmt_check(const char *paths[], int npaths) {
+    int differs = 0;
+
+    for(int i = 0; i < (npaths ? npaths : 1); i++) {
+        const char *path = npaths ? paths[i] : NULL;
+        size_t len = 0;
+        unsigned char *buf = slurp(path, &len);
+        if(!buf) return 2;
+
+        char *why = NULL;
+        char *out = fmt_layout((const char *)buf, len, "    ", &why);
+        if(!out) {
+            fprintf(stderr, "euicc: %s: %s\n", path ? path : "stdin",
+                    why ? why : "cannot lay out");
+            free(buf);
+            return 2;
+        }
+        if(strlen(out) != len || memcmp(out, buf, len) != 0) {
+            puts(path ? path : "(stdin)");
+            differs = 1;
+        }
+        free(out);
+        free(buf);
+    }
+    return differs;
+}
+
 /* ---- entry --------------------------------------------------------------- */
 
 static void
@@ -585,6 +626,7 @@ usage(void) {
         "  diff     what separates a source file from a package\n"
         "  schema   the schema as JSON, for an editor\n"
         "  fmt      value notation laid out, one member to a line\n"
+        "  version  what this binary is, for a bug report or an editor\n"
         "\n"
         "options:\n"
         "  -o FILE     write here instead of to stdout\n"
@@ -592,6 +634,8 @@ usage(void) {
         "  -b          the input is DER or BER\n"
         "  -a          show: add X.680 comments\n"
         "  -w          fmt: write the file back instead of to stdout\n"
+        "  -l          fmt: list the files whose layout differs, and say so in\n"
+        "              the exit code -- what a pre-commit hook or CI runs\n"
         "  -s          check: a warning fails the run too\n"
         "  --json      check: one JSON object, for an editor or a script\n"
         "  --no-rules  check: the reader and the constraints, without the rule set\n"
@@ -610,8 +654,10 @@ main(int argc, char **argv) {
     const char *cmd = argv[1];
     const char *in = NULL, *out = NULL;
     const char *rules = EUICC_RULES_DIR, *skel = EUICC_SKEL_DIR;
+    const char *files[256];
+    int nfiles = 0;
     int as_text = -1, annotated = 0, strict = 0, as_json = 0, in_place = 0;
-    int no_rules = 0;
+    int no_rules = 0, list_only = 0;
     const char *second = NULL;
 
     for(int i = 2; i < argc; i++) {
@@ -622,13 +668,18 @@ main(int argc, char **argv) {
         else if(!strcmp(argv[i], "-b")) as_text = 0;
         else if(!strcmp(argv[i], "-a")) annotated = 1;
         else if(!strcmp(argv[i], "-w")) in_place = 1;
+        else if(!strcmp(argv[i], "-l")) list_only = 1;
         else if(!strcmp(argv[i], "-s")) strict = 1;
         else if(!strcmp(argv[i], "--json")) as_json = 1;
         else if(!strcmp(argv[i], "--no-rules")) no_rules = 1;
 
         else if(argv[i][0] == '-' && argv[i][1]) { usage(); return 2; }
-        else if(!second) second = argv[i];
-        else in = argv[i];
+        else {
+            if(nfiles < (int)(sizeof files / sizeof *files))
+                files[nfiles++] = argv[i];
+            if(!second) second = argv[i];
+            else in = argv[i];
+        }
     }
 
     /* Every command but diff takes one file, and it arrives first. */
@@ -641,7 +692,13 @@ main(int argc, char **argv) {
     else if(!strcmp(cmd, "check")) rc = cmd_check(in, as_text, rules, skel, strict, as_json, no_rules);
     else if(!strcmp(cmd, "diff")) rc = cmd_diff(second, in);
     else if(!strcmp(cmd, "schema")) rc = cmd_schema(stdout);
-    else if(!strcmp(cmd, "fmt")) rc = cmd_fmt(in, in_place);
+    else if(!strcmp(cmd, "fmt")) rc = list_only
+        ? cmd_fmt_check(files, nfiles)
+        : cmd_fmt(in, in_place);
+    else if(!strcmp(cmd, "version")) {
+        printf("euicc %s (%s)\n", EUICC_VERSION, EUICC_GITSHA);
+        rc = 0;
+    }
     else { usage(); rc = 2; }
 
     xsltCleanupGlobals();

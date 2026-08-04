@@ -326,5 +326,24 @@ out=$("$E" check -t --json --skel /nonexistent "$tmp/good.vn" 2>"$tmp/err")
   && ok "check --no-rules: never opens the engine, so a broken skeleton cannot stop it" \
   || bad "check --no-rules: never opens the engine, so a broken skeleton cannot stop it"
 
+# version: what an editor compares against its minimum, and what a bug report
+# quotes. The number is the contract; the commit is a courtesy.
+"$E" version | grep -qE '^euicc [0-9]+\.[0-9]+ \(' \
+  && ok "version: euicc says what it is" || bad "version: euicc says what it is"
+
+# fmt -l: the exit code is the answer, so a hook needs no diffing of its own.
+"$E" fmt "$tmp/messy.vn" > "$tmp/canon2.vn"
+"$E" fmt -l "$tmp/canon2.vn" >/dev/null 2>&1 \
+  && ok "fmt -l: a canonical file passes" || bad "fmt -l: a canonical file passes"
+"$E" fmt -l "$tmp/messy.vn" >/dev/null 2>&1 \
+  && bad "fmt -l: a messy file fails the run" || ok "fmt -l: a messy file fails the run"
+lst=$("$E" fmt -l "$tmp/canon2.vn" "$tmp/messy.vn" 2>/dev/null)
+[ "$lst" = "$tmp/messy.vn" ] \
+  && ok "fmt -l: only the offending file is named" \
+  || bad "fmt -l: only the offending file is named ($lst)"
+"$E" fmt -l /nonexistent.vn >/dev/null 2>&1
+[ $? -eq 2 ] && ok "fmt -l: an unreadable file is exit 2, not a verdict" \
+             || bad "fmt -l: an unreadable file is exit 2, not a verdict"
+
 printf '\n%d ok, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

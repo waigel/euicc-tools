@@ -198,16 +198,47 @@ async function loadSettings(): Promise<void> {
   settings = { ...DEFAULTS, ...(c ?? {}) };
 }
 
+/*
+ * What this server needs from the binary, and the reason the check exists at
+ * all: install the extension, forget `make install`, and the old euicc under
+ * the same path fails in ways that point everywhere but at the cause -- no
+ * completion because `schema` is unknown, no findings while typing because
+ * `--no-rules` is. terraform-ls verifies its terraform the same way. A binary
+ * that is missing entirely stays silent here; the first check already reports
+ * that, once, where the file is.
+ */
+const NEED = { major: 1, minor: 0 };
+let versionCheckedFor: string | null = null;
+
+function verifyBinary(): void {
+  if (versionCheckedFor === settings.path) return;
+  versionCheckedFor = settings.path;
+  execFile(settings.path, ["version"], { timeout: 5000 }, (err, stdout) => {
+    if (err && (err as NodeJS.ErrnoException).code === "ENOENT") return;
+    const m = /^euicc (\d+)\.(\d+)/.exec(stdout || "");
+    const tooOld =
+      !m || +m[1] < NEED.major || (+m[1] === NEED.major && +m[2] < NEED.minor);
+    if (!tooOld) return;
+    const got = m ? `${m[1]}.${m[2]}` : "one that predates `euicc version`";
+    void connection.window.showWarningMessage(
+      `The euicc at '${settings.path}' is older than this extension needs ` +
+        `(${got}, needs ${NEED.major}.${NEED.minor}). Completion, checking ` +
+        `while typing and formatting may misbehave until it is rebuilt: ` +
+        `make install PREFIX=~/.local`
+    );
+  });
+}
+
 connection.onInitialized(() => {
   connection.client.register(DidChangeConfigurationNotification.type, undefined);
   // A document can open before the configuration arrives. Without this the
   // first check of a session runs with the default path and reports that euicc
   // is missing, on a machine where it is not.
-  settingsReady = loadSettings();
+  settingsReady = loadSettings().then(verifyBinary);
 });
 
 connection.onDidChangeConfiguration(async () => {
-  settingsReady = loadSettings();
+  settingsReady = loadSettings().then(verifyBinary);
   await settingsReady;
   /* The path to euicc may have changed, and with it the schema. */
   schemaOnce = undefined;
