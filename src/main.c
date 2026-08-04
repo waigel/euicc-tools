@@ -380,22 +380,13 @@ cmd_check(const char *in, int as_text, const char *rules, const char *skel,
     }
     free(buf);
 
-    int bad = 0, first = 1;
-    if(as_json) printf("{\n \"findings\": [");
-    for(int i = 0; i < n; i++) {
-        char reason[512];
-        size_t rlen = sizeof reason;
-        if(vn_check_constraints(&asn_DEF_ProfileElement, pe[i], reason, &rlen) != 0) {
-            if(as_json) {
-                json_finding(first, "error", "schema", reason, lines[i], 1, NULL);
-                first = 0;
-            } else {
-                printf("  schema   profile element %d: %s\n", i + 1, reason);
-            }
-            bad++;
-        }
-    }
-
+    /*
+     * Everything that can fail to run comes before the first byte of output.
+     * The JSON prologue used to be printed first, so a missing rule directory
+     * or skeleton left an unterminated object on stdout; an editor then said
+     * "did not write JSON" and threw away the stderr line that named the real
+     * cause. Exit 2 now means stdout stayed empty and stderr says why.
+     */
     sch_engine_t *e = sch_open(rules, skel);
     if(!e) return 2;
 
@@ -411,6 +402,22 @@ cmd_check(const char *in, int as_text, const char *rules, const char *skel,
         xmlFreeDoc(doc);
         sch_close(e);
         return 2;
+    }
+
+    int bad = 0, first = 1;
+    if(as_json) printf("{\n \"findings\": [");
+    for(int i = 0; i < n; i++) {
+        char reason[512];
+        size_t rlen = sizeof reason;
+        if(vn_check_constraints(&asn_DEF_ProfileElement, pe[i], reason, &rlen) != 0) {
+            if(as_json) {
+                json_finding(first, "error", "schema", reason, lines[i], 1, NULL);
+                first = 0;
+            } else {
+                printf("  schema   profile element %d: %s\n", i + 1, reason);
+            }
+            bad++;
+        }
     }
 
     int errors = 0, warnings = 0;

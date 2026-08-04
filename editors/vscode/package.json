@@ -1,7 +1,7 @@
 {
   "name": "euicc-vn",
   "displayName": "eUICC profile packages",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "description": "Write eUICC profile packages in ASN.1 value notation, with the rules checked as you save.",
   "publisher": "waigel",
   "license": "MIT",
@@ -70,6 +70,11 @@
           "type": "string",
           "default": "https://euicc.waigel.com",
           "description": "Where the rule pages are. A finding's code links to its page there. Empty leaves the codes plain."
+        },
+        "euicc.skel": {
+          "type": "string",
+          "default": "",
+          "description": "The ISO Schematron transforms, for a machine where the path compiled into euicc does not exist. Empty uses that compiled-in path."
         }
       }
     },

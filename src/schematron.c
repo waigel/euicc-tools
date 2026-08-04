@@ -39,35 +39,27 @@ struct sch_engine {
     size_t count;
 };
 
-static xmlDocPtr
-apply_step(const char *skeldir, const char *step, xmlDocPtr in) {
-    char path[4096];
-    snprintf(path, sizeof path, "%s/%s", skeldir, step);
-
-    xsltStylesheetPtr xsl = xsltParseStylesheetFile((const xmlChar *)path);
-    if(!xsl) {
-        fprintf(stderr, "euicc: cannot read the skeleton transform %s\n", path);
-        return NULL;
-    }
-    xmlDocPtr out = xsltApplyStylesheet(xsl, in, NULL);
-    xsltFreeStylesheet(xsl);
-    return out;
-}
-
 /*
  * A .sch file becomes a stylesheet that validates. The skeleton needs the
  * document on disk rather than in memory for its first step, because
  * iso_dsdl_include.xsl resolves includes against the location of the file.
+ *
+ * The three skeleton stylesheets arrive already compiled. They used to be
+ * parsed from disk here, per step and per rule file: three parses for each of
+ * nineteen .sch files, 57 parses of the same three files in every run, and
+ * most of the cost of a check that an editor repeats at every pause in typing.
+ * A compiled stylesheet is read-only under xsltApplyStylesheet, so one parse
+ * each is enough for the whole process.
  */
 static xsltStylesheetPtr
-compile_rules(const char *skeldir, const char *sch_path) {
+compile_rules(xsltStylesheetPtr skel[], size_t nskel, const char *sch_path) {
     xmlDocPtr doc = xmlReadFile(sch_path, NULL, XML_PARSE_NONET);
     if(!doc) {
         fprintf(stderr, "euicc: cannot read the rule file %s\n", sch_path);
         return NULL;
     }
-    for(size_t i = 0; i < sizeof SKELETON / sizeof *SKELETON; i++) {
-        xmlDocPtr next = apply_step(skeldir, SKELETON[i], doc);
+    for(size_t i = 0; i < nskel; i++) {
+        xmlDocPtr next = xsltApplyStylesheet(skel[i], doc, NULL);
         xmlFreeDoc(doc);
         if(!next) return NULL;
         doc = next;
@@ -81,12 +73,31 @@ sch_engine_t *
 sch_open(const char *rules_dir, const char *skeldir) {
     glob_t g;
     char pattern[4096];
-    snprintf(pattern, sizeof pattern, "%s/*.sch", rules_dir);
+    size_t nskel = sizeof SKELETON / sizeof *SKELETON;
+    xsltStylesheetPtr skel[sizeof SKELETON / sizeof *SKELETON] = {0};
 
+    snprintf(pattern, sizeof pattern, "%s/*.sch", rules_dir);
     if(glob(pattern, 0, NULL, &g) != 0 || g.gl_pathc == 0) {
-        fprintf(stderr, "euicc: no rule file in %s\n", rules_dir);
+        fprintf(stderr,
+                "euicc: no rule file in %s (--rules points at the rule set)\n",
+                rules_dir);
         globfree(&g);
         return NULL;
+    }
+
+    for(size_t i = 0; i < nskel; i++) {
+        char path[4096];
+        snprintf(path, sizeof path, "%s/%s", skeldir, SKELETON[i]);
+        skel[i] = xsltParseStylesheetFile((const xmlChar *)path);
+        if(!skel[i]) {
+            fprintf(stderr,
+                    "euicc: cannot read the skeleton transform %s"
+                    " (--skel points at the ISO Schematron transforms)\n",
+                    path);
+            while(i > 0) xsltFreeStylesheet(skel[--i]);
+            globfree(&g);
+            return NULL;
+        }
     }
 
     sch_engine_t *e = calloc(1, sizeof *e);
@@ -94,8 +105,9 @@ sch_open(const char *rules_dir, const char *skeldir) {
     e->names = calloc(g.gl_pathc, sizeof *e->names);
 
     for(size_t i = 0; i < g.gl_pathc; i++) {
-        e->compiled[e->count] = compile_rules(skeldir, g.gl_pathv[i]);
+        e->compiled[e->count] = compile_rules(skel, nskel, g.gl_pathv[i]);
         if(!e->compiled[e->count]) {
+            for(size_t k = 0; k < nskel; k++) xsltFreeStylesheet(skel[k]);
             globfree(&g);
             sch_close(e);
             return NULL;
@@ -104,6 +116,8 @@ sch_open(const char *rules_dir, const char *skeldir) {
         e->names[e->count] = strdup(base ? base + 1 : g.gl_pathv[i]);
         e->count++;
     }
+    /* The skeletons are only needed to compile; the validators stand alone. */
+    for(size_t k = 0; k < nskel; k++) xsltFreeStylesheet(skel[k]);
     globfree(&g);
     return e;
 }

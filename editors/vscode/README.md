@@ -75,6 +75,7 @@ If `euicc` is somewhere else, set `euicc.path`.
 | `euicc.checkOn` | `type` to check as you write, `save` to wait for a save. |
 | `euicc.checkDelay` | Milliseconds of quiet before a check while typing. |
 | `euicc.docs` | Where the rule pages are. Empty leaves the codes plain. |
+| `euicc.skel` | The ISO Schematron transforms, if the compiled-in path does not exist here. |
 
 The extension parses no ASN.1 and evaluates no rule. Every diagnostic comes from
 `euicc`, so the editor cannot report something that the build does not.

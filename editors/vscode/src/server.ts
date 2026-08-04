@@ -75,6 +75,7 @@ interface Settings {
   checkOn: "save" | "type";
   checkDelay: number;
   docs: string;
+  skel: string;
 }
 
 const DEFAULTS: Settings = {
@@ -83,6 +84,7 @@ const DEFAULTS: Settings = {
   checkOn: "type",
   checkDelay: 300,
   docs: "https://euicc.waigel.com",
+  skel: "",
 };
 
 /*
@@ -194,6 +196,10 @@ connection.onDidChangeConfiguration(async () => {
 function runEuicc(text: string): { done: Promise<Report | string>; kill: () => void } {
   const args = ["check", "--json", "-t"];
   if (settings.rules) args.push("--rules", settings.rules);
+  /* euicc compiles in the path of the machine it was built on; on another
+     machine the transforms live elsewhere, and until it could be set here the
+     only symptom was a check that never answered. */
+  if (settings.skel) args.push("--skel", settings.skel);
 
   let child: ReturnType<typeof execFile> | undefined;
   const done = new Promise<Report | string>((resolve) => {

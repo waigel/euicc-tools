@@ -295,5 +295,20 @@ cp "$tmp/messy.vn" "$tmp/inplace.vn"
 cmp -s "$tmp/inplace.vn" "$tmp/laid.vn" \
   && ok "fmt: -w writes the file back" || bad "fmt: -w writes the file back"
 
+# Exit 2 means the check could not run, and it has to look that way: stdout
+# stays empty and stderr names the cause. The JSON prologue used to be printed
+# before the rule engine opened, so a missing rules directory left an
+# unterminated object on stdout -- an editor then said "did not write JSON"
+# and threw away the stderr line that said "no rule file in ...".
+mkdir -p "$tmp/norules"
+out=$("$E" check -t --json --rules "$tmp/norules" "$tmp/good.vn" 2>"$tmp/err")
+[ -z "$out" ] && grep -q "no rule file" "$tmp/err" \
+  && ok "check: a missing rule set keeps stdout empty and says why" \
+  || bad "check: a missing rule set keeps stdout empty and says why (out=[$out])"
+out=$("$E" check -t --json --skel /nonexistent "$tmp/good.vn" 2>"$tmp/err")
+[ -z "$out" ] && grep -q "skeleton transform" "$tmp/err" \
+  && ok "check: a missing skeleton keeps stdout empty and says why" \
+  || bad "check: a missing skeleton keeps stdout empty and says why (out=[$out])"
+
 printf '\n%d ok, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
