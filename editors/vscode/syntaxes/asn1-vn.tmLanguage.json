@@ -20,6 +20,9 @@
       "include": "#binstring"
     },
     {
+      "include": "#wrapped-literal"
+    },
+    {
       "include": "#cstring"
     },
     {
@@ -76,6 +79,12 @@
       "comment": "X.680 12.11: a bstring, and a value for the same reason.",
       "match": "'[01\\s]*'[Bb]",
       "name": "constant.numeric.binary.asn1"
+    },
+    "wrapped-literal": {
+      "comment": "An hstring or a bstring wrapped over lines, which X.680 12.11 and 12.12 allow because the whitespace inside one is not part of the value -- and which the writer does to every literal longer than a line. A TextMate match rule sees one line at a time, so the single-line rules above cannot reach these: the body of every wrapped literal in every published profile rendered colourless and its closing H as a type. The begin fires only when the rest of the line is hex digits and whitespace, which is what an unclosed literal looks like and a closed one never does. One name for both kinds, because every theme colours the two constant.numeric scopes alike and the split cannot be told from the opening line.",
+      "begin": "'(?=[0-9A-Fa-f\\s]*$)",
+      "end": "'[HhBb]",
+      "name": "constant.numeric.hex.asn1"
     },
     "cstring": {
       "begin": "\"",

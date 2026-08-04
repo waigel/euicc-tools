@@ -26,7 +26,9 @@ const SAMPLE = [
   `    eUICC-Mandatory-GFSTEList { { 2 23 143 1 2 1 } },`,
   `    flags '1101'B,`,
   `    pinStatus enabled,`,
-  `    lcsi [10] OCTET STRING OPTIONAL`,
+  `    lcsi [10] OCTET STRING OPTIONAL,`,
+  `    wrapped '8001019000800102A406`,
+  `        83010A950108'H`,
   `}`,
 ];
 
@@ -74,6 +76,11 @@ const EXPECT = [
   ["OCTET STRING", "support.type"],
   ["[10]", "entity.other.attribute-name.tag"],
   ["OPTIONAL", "storage.type"],
+  /* A literal wrapped over lines needs a begin/end rule: a match rule sees
+     one line, so the body of every wrapped hstring in every published
+     profile rendered colourless and its closing H as a type. */
+  ["'8001019000800102A406", "constant.numeric.hex"],
+  ["83010A950108'H", "constant.numeric.hex"],
   /* A hyphen is a word boundary, so the capitalised part of a lower-case
      identifier used to match the type-reference rule. */
   ["Mandatory-services", { not: "entity.name.class" }],
@@ -174,7 +181,8 @@ function scopeAt(lines, text) {
    * 19 from the #9CDCFE of a member name. A pair that reads clearly in one is
    * not evidence about the other.
    */
-  for (const theme of ["dark_modern.json", "2026-dark.json"]) {
+  for (const theme of ["dark_modern.json", "2026-dark.json",
+                       "light_modern.json", "2026-light.json"]) {
     const c = themeColours(theme);
     if (!c) {
       console.log(`\nskip  no VS Code here, so ${theme} was not resolved`);
@@ -302,9 +310,14 @@ function themeColours(file) {
   if (!fs.existsSync(dir + file)) return null;
 
   const rules = [];
+  /* What unstyled text renders as. Read from the theme itself: guessing it
+     was how the light themes stayed out of this gate for weeks. */
+  let plain = "#D4D4D4";
   (function load(name) {
     const d = JSON.parse(fs.readFileSync(dir + name, "utf8"));
     if (d.include) load(d.include.replace("./", ""));
+    if (d.colors?.["editor.foreground"])
+      plain = d.colors["editor.foreground"].toUpperCase();
     for (const r of d.tokenColors ?? []) {
       if (!r.settings.foreground) continue;
       const sel = typeof r.scope === "string" ? r.scope.split(",") : r.scope ?? [];
@@ -318,9 +331,6 @@ function themeColours(file) {
 
   const hits = (selector, scope) =>
     scope === selector || scope.startsWith(selector + ".");
-
-  /* Dark 2026 sets editor.foreground; the older themes leave it to #D4D4D4. */
-  const plain = file.startsWith("2026") ? "#C9D1D9" : "#D4D4D4";
 
   return (scopes) => {
     let best = plain;

@@ -1,7 +1,7 @@
 {
   "name": "euicc-vn",
   "displayName": "eUICC profile packages",
-  "version": "0.16.0",
+  "version": "0.16.1",
   "description": "Write eUICC profile packages in ASN.1 value notation, with the rules checked as you save.",
   "publisher": "waigel",
   "license": "MIT",
@@ -123,7 +123,7 @@
   "scripts": {
     "compile": "tsc -p . --noEmit && node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
-    "test": "npm run compile && node test/grammar.js && node test/completion.js && node test/server.js && node test/race.js && node test/lanes.js && node test/columns.js && node test/outline.js && node test/fallback.js",
+    "test": "npm run compile && node test/grammar.js && node test/completion.js && node test/server.js && node test/race.js && node test/lanes.js && node test/columns.js && node test/outline.js && node test/fallback.js && node test/corpus.js",
     "package": "npm run compile -- --minify && vsce package",
     "vscode:prepublish": "npm run compile -- --minify"
   },
