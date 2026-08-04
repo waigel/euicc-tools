@@ -180,6 +180,7 @@ connection.onDidChangeConfiguration(async () => {
   await settingsReady;
   /* The path to euicc may have changed, and with it the schema. */
   schemaOnce = undefined;
+  asnCache = null;
   for (const d of documents.all()) void check(d);
 });
 
@@ -193,7 +194,7 @@ connection.onDidChangeConfiguration(async () => {
  * killed rather than left to finish and answer about text nobody has any
  * more.
  */
-function runEuicc(text: string): { done: Promise<Report | string>; kill: () => void } {
+function runEuicc(text: string): { done: Promise<Report | string | null>; kill: () => void } {
   const args = ["check", "--json", "-t"];
   if (settings.rules) args.push("--rules", settings.rules);
   /* euicc compiles in the path of the machine it was built on; on another
@@ -202,12 +203,25 @@ function runEuicc(text: string): { done: Promise<Report | string>; kill: () => v
   if (settings.skel) args.push("--skel", settings.skel);
 
   let child: ReturnType<typeof execFile> | undefined;
-  const done = new Promise<Report | string>((resolve) => {
+  let killed = false;
+  const done = new Promise<Report | string | null>((resolve) => {
     child = execFile(
       settings.path,
       args,
       { timeout: 20000, maxBuffer: 8 << 20 },
       (err, stdout, stderr) => {
+        /*
+         * A run this server killed has nothing to say. Its child dies with
+         * empty stdout, which is the same shape as "the tool is missing", and
+         * for as long as the two were not told apart, superseding a run whose
+         * document version had not moved -- a save landing while the typing
+         * timer was still pending -- published "cannot run euicc" on line 0
+         * until the real answer overwrote it.
+         */
+        if (killed) {
+          resolve(null);
+          return;
+        }
         // A non-zero exit means findings, not a failure to run. Only an empty
         // stdout says the command itself did not work.
         if (!stdout.trim()) {
@@ -226,7 +240,13 @@ function runEuicc(text: string): { done: Promise<Report | string>; kill: () => v
     );
     child.stdin?.end(text, "utf8");
   });
-  return { done, kill: () => child?.kill() };
+  return {
+    done,
+    kill: () => {
+      killed = true;
+      child?.kill();
+    },
+  };
 }
 
 /*
@@ -272,7 +292,8 @@ async function check(doc: TextDocument): Promise<void> {
 
   const report = await run.done;
   if (running.get(doc.uri) === run.kill) running.delete(doc.uri);
-  /* The buffer moved on while this ran; its answer is about the old text. */
+  /* Superseded, or the buffer moved on: the answer is about old text. */
+  if (report === null) return;
   if (doc.version !== version) return;
   if (typeof report === "string") {
     // The tool is missing or broke. Say so once, on the first line, rather
@@ -364,6 +385,26 @@ interface Explained {
   fix?: { title: string; insert: string };
 }
 
+/*
+ * The ASN.1 the schema is written in, read once and kept with its line index.
+ * explain() used to read the 1197-line file again for every finding, and a
+ * definition request twice more on top. Invalidated with the schema, because
+ * euicc.path decides where both live.
+ */
+let asnCache: { source: string; text: string; lines: string[] } | null = null;
+
+function loadAsn(schema: Schema): { text: string; lines: string[] } | null {
+  if (!schema.source) return null;
+  if (asnCache && asnCache.source === schema.source) return asnCache;
+  try {
+    const text = readFileSync(schema.source, "utf8");
+    asnCache = { source: schema.source, text, lines: text.split("\n") };
+  } catch {
+    return null;
+  }
+  return asnCache;
+}
+
 /* A place in the ASN.1, for the second line of a TypeScript-shaped error. */
 function declaredAt(
   schema: Schema,
@@ -371,21 +412,16 @@ function declaredAt(
   name: string,
   message: string
 ): DiagnosticRelatedInformation | undefined {
-  if (!schema.source) return undefined;
-  let asn: string;
-  try {
-    asn = readFileSync(schema.source, "utf8");
-  } catch {
-    return undefined;
-  }
-  const line = declarationLine(asn, type, name);
+  const asn = loadAsn(schema);
+  if (!asn || !schema.source) return undefined;
+  const line = declarationLine(asn.text, type, name);
   if (line === null) return undefined;
   return {
     location: {
       uri: pathToFileURL(schema.source).toString(),
       range: {
         start: { line, character: 0 },
-        end: { line, character: asn.split("\n")[line].length },
+        end: { line, character: asn.lines[line].length },
       },
     },
     message,
@@ -710,17 +746,13 @@ connection.languages.semanticTokens.on(async (params) => {
  */
 function asnLocation(schema: Schema, line: number | null) {
   if (line === null || !schema.source) return null;
-  let asn: string;
-  try {
-    asn = readFileSync(schema.source, "utf8");
-  } catch {
-    return null;
-  }
+  const asn = loadAsn(schema);
+  if (!asn) return null;
   return {
     uri: pathToFileURL(schema.source).toString(),
     range: {
       start: { line, character: 0 },
-      end: { line, character: (asn.split("\n")[line] ?? "").length },
+      end: { line, character: (asn.lines[line] ?? "").length },
     },
   };
 }
@@ -731,13 +763,9 @@ async function schemaAndAsn(uri: string) {
   if (!doc || doc.languageId !== "asn1-vn") return null;
   const schema = await loadSchema();
   if (!schema?.source) return null;
-  let asn: string;
-  try {
-    asn = readFileSync(schema.source, "utf8");
-  } catch {
-    return null;
-  }
-  return { doc, schema, asn };
+  const asn = loadAsn(schema);
+  if (!asn) return null;
+  return { doc, schema, asn: asn.text };
 }
 
 connection.onDefinition(async (params) => {
