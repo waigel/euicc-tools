@@ -148,7 +148,7 @@ Four levels, three of them without hardware.
 
 | Level | What it proves | In CI |
 | --- | --- | --- |
-| Vectors | ECDSA, ECDH with its derivation, AES-CMAC against the SGP.26 values | yes |
+| Vectors | ECDH and AES-CMAC against published NIST values; the certificate chain against the SGP.26 material. The key derivation of SGP.22 has no published vector and is pinned to its own output until a card settles it | yes |
 | Round trip | UPP to BPP, decrypt it again, compare with `euicc diff`. Catches segmentation, padding, MAC chaining | yes |
 | Recorded card | A captured handshake is replayed and the whole flow computes through. The recording plus the expected BPP is the golden vector | yes |
 | Real card | `make check-card`, only with a reader attached. It refuses to run in CI instead of passing silently | no |
