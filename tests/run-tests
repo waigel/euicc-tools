@@ -310,5 +310,21 @@ out=$("$E" check -t --json --skel /nonexistent "$tmp/good.vn" 2>"$tmp/err")
   && ok "check: a missing skeleton keeps stdout empty and says why" \
   || bad "check: a missing skeleton keeps stdout empty and says why (out=[$out])"
 
+# --no-rules: the reader and the constraints without the rule set. What an
+# editor asks at every pause in typing, so it has to be silent about the prose
+# rules, loud about the schema, and independent of the rule engine entirely.
+"$E" check -t --json --no-rules "$tmp/bad.vn" 2>/dev/null | grep -q "SAIP" \
+  && bad "check --no-rules: the rule set stays out of it" \
+  || ok "check --no-rules: the rule set stays out of it"
+"$E" check -t --json --no-rules "$tmp/bad.vn" >/dev/null 2>&1 \
+  && ok "check --no-rules: a rule violation alone passes" \
+  || bad "check --no-rules: a rule violation alone passes"
+"$E" check -t --json --no-rules "$tmp/short.vn" 2>/dev/null | grep -q '"code": "schema"' \
+  && ok "check --no-rules: a constraint failure is still caught" \
+  || bad "check --no-rules: a constraint failure is still caught"
+"$E" check -t --json --no-rules --skel /nonexistent "$tmp/good.vn" >/dev/null 2>&1 \
+  && ok "check --no-rules: never opens the engine, so a broken skeleton cannot stop it" \
+  || bad "check --no-rules: never opens the engine, so a broken skeleton cannot stop it"
+
 printf '\n%d ok, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

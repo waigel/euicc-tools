@@ -18,7 +18,12 @@ Interoperable Format*, version 3.4.1, which the industry calls SAIP.
 
 A profile package fails in two ways. The ASN.1 module states what a value may
 hold: a type, a size, a range. The specification states in prose what a package
-must look like: one header, and it comes first. Both appear as diagnostics.
+must look like: one header, and it comes first. Both appear as diagnostics, at
+two cadences: what the reader and the constraints say is recomputed at every
+pause in typing and costs single milliseconds, and what the rule set says is
+recomputed when you open or save. Between saves the rule findings stand as
+last computed, the way a type error outlives the syntax error you are in the
+middle of making.
 
 ## Two layers of colour
 

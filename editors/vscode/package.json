@@ -1,7 +1,7 @@
 {
   "name": "euicc-vn",
   "displayName": "eUICC profile packages",
-  "version": "0.13.1",
+  "version": "0.14.0",
   "description": "Write eUICC profile packages in ASN.1 value notation, with the rules checked as you save.",
   "publisher": "waigel",
   "license": "MIT",
@@ -58,7 +58,7 @@
             "type"
           ],
           "default": "type",
-          "description": "When to check. Checking as you type waits for a pause first, so a run costs one process and not one per keystroke."
+          "description": "When to check. `type` runs the reader and the constraints at every pause in typing and the rule set when you open or save; `save` waits for a save entirely."
         },
         "euicc.checkDelay": {
           "type": "number",
@@ -123,7 +123,7 @@
   "scripts": {
     "compile": "tsc -p . --noEmit && node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
-    "test": "npm run compile && node test/grammar.js && node test/completion.js && node test/server.js && node test/race.js",
+    "test": "npm run compile && node test/grammar.js && node test/completion.js && node test/server.js && node test/race.js && node test/lanes.js",
     "package": "npm run compile -- --minify && vsce package",
     "vscode:prepublish": "npm run compile -- --minify"
   },

@@ -181,7 +181,7 @@ connection.onDidChangeConfiguration(async () => {
   /* The path to euicc may have changed, and with it the schema. */
   schemaOnce = undefined;
   asnCache = null;
-  for (const d of documents.all()) void check(d);
+  for (const d of documents.all()) void check(d, true);
 });
 
 /*
@@ -194,8 +194,12 @@ connection.onDidChangeConfiguration(async () => {
  * killed rather than left to finish and answer about text nobody has any
  * more.
  */
-function runEuicc(text: string): { done: Promise<Report | string | null>; kill: () => void } {
+function runEuicc(
+  text: string,
+  full: boolean
+): { done: Promise<Report | string | null>; kill: () => void } {
   const args = ["check", "--json", "-t"];
+  if (!full) args.push("--no-rules");
   if (settings.rules) args.push("--rules", settings.rules);
   /* euicc compiles in the path of the machine it was built on; on another
      machine the transforms live elsewhere, and until it could be set here the
@@ -281,13 +285,40 @@ function runEuiccText(args: string[], text: string): Promise<string | null> {
  */
 const running = new Map<string, () => void>();
 
-async function check(doc: TextDocument): Promise<void> {
+/*
+ * One slot per kind of finding, merged at publish -- the arrangement
+ * terraform-ls keeps as map[uri]map[source]. What the reader and the
+ * constraints say is recomputed at every pause in typing, because it is about
+ * the text under the cursor and costs single milliseconds. What the rule set
+ * says is recomputed on open and save: the prose rules describe a whole
+ * package, rerunning them against text that is mid-edit answers a question
+ * nobody asked, and they are the expensive part. Between saves the rule
+ * findings stand as last computed, the way a type error outlives the syntax
+ * error you are in the middle of making.
+ */
+interface Slots {
+  fast: Diagnostic[];
+  rules: Diagnostic[];
+}
+const slots = new Map<string, Slots>();
+
+/*
+ * The version a full check last ran for. TextDocuments fires a content event
+ * for the open itself, so without this the open ran twice -- and the second,
+ * cheaper run could kill the first before the rule findings ever arrived. A
+ * fast run for a version the full lane already covers has nothing to add.
+ */
+const fullChecked = new Map<string, number>();
+
+async function check(doc: TextDocument, full: boolean): Promise<void> {
   if (doc.languageId !== "asn1-vn") return;
   if (settingsReady) await settingsReady;
+  if (full) fullChecked.set(doc.uri, doc.version);
+  else if (fullChecked.get(doc.uri) === doc.version) return;
 
   running.get(doc.uri)?.();
   const version = doc.version;
-  const run = runEuicc(doc.getText());
+  const run = runEuicc(doc.getText(), full);
   running.set(doc.uri, run.kill);
 
   const report = await run.done;
@@ -297,7 +328,8 @@ async function check(doc: TextDocument): Promise<void> {
   if (doc.version !== version) return;
   if (typeof report === "string") {
     // The tool is missing or broke. Say so once, on the first line, rather
-    // than leave the file looking clean.
+    // than leave stale findings implying the file was checked.
+    slots.delete(doc.uri);
     connection.sendDiagnostics({
       uri: doc.uri,
       diagnostics: [
@@ -314,7 +346,9 @@ async function check(doc: TextDocument): Promise<void> {
 
   const schema = await loadSchema();
 
-  const diagnostics: Diagnostic[] = report.findings.map((f) => {
+  const fast: Diagnostic[] = [];
+  const rules: Diagnostic[] = [];
+  for (const f of report.findings) {
     const line = Math.max(0, f.line - 1);
     const character = Math.max(0, f.column - 1);
     const lineText = doc.getText({
@@ -341,10 +375,20 @@ async function check(doc: TextDocument): Promise<void> {
       if (extra.related) d.relatedInformation = [extra.related];
       if (extra.fix) d.data = extra.fix;
     }
-    return d;
-  });
+    /* A rule finding names the .sch it came from; the reader's do not. */
+    (f.source ? rules : fast).push(d);
+  }
 
-  connection.sendDiagnostics({ uri: doc.uri, diagnostics });
+  const prev = slots.get(doc.uri);
+  const next: Slots = full
+    ? { fast, rules }
+    : { fast, rules: prev?.rules ?? [] };
+  slots.set(doc.uri, next);
+
+  connection.sendDiagnostics({
+    uri: doc.uri,
+    diagnostics: [...next.fast, ...next.rules],
+  });
 }
 
 /* ---- what a finding leaves out --------------------------------------------- */
@@ -621,7 +665,7 @@ function checkSoon(doc: TextDocument): void {
     doc.uri,
     setTimeout(() => {
       pending.delete(doc.uri);
-      void check(doc);
+      void check(doc, false);
     }, delay)
   );
 }
@@ -800,8 +844,8 @@ connection.onTypeDefinition(async (params) => {
   return asnLocation(schema, line);
 });
 
-documents.onDidSave((e) => void check(e.document));
-documents.onDidOpen((e) => void check(e.document));
+documents.onDidSave((e) => void check(e.document, true));
+documents.onDidOpen((e) => void check(e.document, true));
 documents.onDidChangeContent((e) => {
   if (settings.checkOn === "type") checkSoon(e.document);
 });
@@ -809,6 +853,8 @@ documents.onDidClose((e) => {
   const t = pending.get(e.document.uri);
   if (t) clearTimeout(t);
   pending.delete(e.document.uri);
+  slots.delete(e.document.uri);
+  fullChecked.delete(e.document.uri);
   connection.sendDiagnostics({ uri: e.document.uri, diagnostics: [] });
 });
 

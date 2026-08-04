@@ -351,7 +351,7 @@ cmd_show(const char *in, int as_text, int annotated) {
 
 static int
 cmd_check(const char *in, int as_text, const char *rules, const char *skel,
-          int strict, int as_json) {
+          int strict, int as_json, int no_rules) {
     size_t len = 0;
     unsigned char *buf = slurp(in, &len);
     if(!buf) return 1;
@@ -386,22 +386,33 @@ cmd_check(const char *in, int as_text, const char *rules, const char *skel,
      * or skeleton left an unterminated object on stdout; an editor then said
      * "did not write JSON" and threw away the stderr line that named the real
      * cause. Exit 2 now means stdout stayed empty and stderr says why.
+     *
+     * --no-rules is the reader and the constraints without the rule set: what
+     * an editor asks at every pause in typing, where the prose rules would be
+     * recomputed against text that is mid-edit anyway. It also never opens the
+     * rule engine, so a machine whose rules or transforms are missing still
+     * gets its parse and constraint findings while writing.
      */
-    sch_engine_t *e = sch_open(rules, skel);
-    if(!e) return 2;
+    sch_engine_t *e = NULL;
+    xmlDocPtr doc = NULL;
+    sch_result_t res = {0};
 
-    xmlDocPtr doc = package_to_xml(pe, n);
-    if(!doc) {
-        fprintf(stderr, "euicc: cannot render the package as XML\n");
-        sch_close(e);
-        return 2;
-    }
+    if(!no_rules) {
+        e = sch_open(rules, skel);
+        if(!e) return 2;
 
-    sch_result_t res;
-    if(sch_validate(e, doc, &res) != 0) {
-        xmlFreeDoc(doc);
-        sch_close(e);
-        return 2;
+        doc = package_to_xml(pe, n);
+        if(!doc) {
+            fprintf(stderr, "euicc: cannot render the package as XML\n");
+            sch_close(e);
+            return 2;
+        }
+
+        if(sch_validate(e, doc, &res) != 0) {
+            xmlFreeDoc(doc);
+            sch_close(e);
+            return 2;
+        }
     }
 
     int bad = 0, first = 1;
@@ -580,6 +591,7 @@ usage(void) {
         "  -w          fmt: write the file back instead of to stdout\n"
         "  -s          check: a warning fails the run too\n"
         "  --json      check: one JSON object, for an editor or a script\n"
+        "  --no-rules  check: the reader and the constraints, without the rule set\n"
 
         "  --rules DIR the rule set, default " EUICC_RULES_DIR "\n"
         "  --skel DIR  the ISO Schematron transforms\n"
@@ -596,6 +608,7 @@ main(int argc, char **argv) {
     const char *in = NULL, *out = NULL;
     const char *rules = EUICC_RULES_DIR, *skel = EUICC_SKEL_DIR;
     int as_text = -1, annotated = 0, strict = 0, as_json = 0, in_place = 0;
+    int no_rules = 0;
     const char *second = NULL;
 
     for(int i = 2; i < argc; i++) {
@@ -608,6 +621,7 @@ main(int argc, char **argv) {
         else if(!strcmp(argv[i], "-w")) in_place = 1;
         else if(!strcmp(argv[i], "-s")) strict = 1;
         else if(!strcmp(argv[i], "--json")) as_json = 1;
+        else if(!strcmp(argv[i], "--no-rules")) no_rules = 1;
 
         else if(argv[i][0] == '-' && argv[i][1]) { usage(); return 2; }
         else if(!second) second = argv[i];
@@ -621,7 +635,7 @@ main(int argc, char **argv) {
     int rc;
     if(!strcmp(cmd, "build")) rc = cmd_build(in, out, as_text);
     else if(!strcmp(cmd, "show")) rc = cmd_show(in, as_text, annotated);
-    else if(!strcmp(cmd, "check")) rc = cmd_check(in, as_text, rules, skel, strict, as_json);
+    else if(!strcmp(cmd, "check")) rc = cmd_check(in, as_text, rules, skel, strict, as_json, no_rules);
     else if(!strcmp(cmd, "diff")) rc = cmd_diff(second, in);
     else if(!strcmp(cmd, "schema")) rc = cmd_schema(stdout);
     else if(!strcmp(cmd, "fmt")) rc = cmd_fmt(in, in_place);
