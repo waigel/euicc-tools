@@ -12,6 +12,8 @@ Interoperable Format*, version 3.4.1, which the industry calls SAIP.
 - Offers the members allowed at the cursor, with their types.
 - Shows a member's type and whether it may be left out, on hover.
 - Goes to the line of the ASN.1 that declares a name.
+- Outlines the document: every named brace, nested as written, so a thirty
+  element package is navigated from the sidebar and the breadcrumbs.
 - Reports the errors that `euicc check` reports, as you write them, and offers
   the edit where it knows one.
 - Lays the file out: one member to a line, indented by depth.

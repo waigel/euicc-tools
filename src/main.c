@@ -104,7 +104,10 @@ line_at(const unsigned char *buf, size_t off) {
     return line;
 }
 
-/* The 1-based column, counted from the last newline before the offset. */
+/* The 1-based column, counted from the last newline before the offset -- in
+   bytes, deliberately. A terminal indexes bytes and so does this tool
+   everywhere; LSP indexes UTF-16 code units, and the server converts at its
+   edge, the direction terraform-ls converts in too. */
 static int
 column_at(const unsigned char *buf, size_t off) {
     size_t start = off;

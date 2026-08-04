@@ -28,6 +28,7 @@ import {
   DiagnosticSeverity,
   DiagnosticRelatedInformation,
   DidChangeConfigurationNotification,
+  DocumentSymbol,
   InitializeParams,
   InsertTextFormat,
   MarkupKind,
@@ -35,6 +36,7 @@ import {
   CodeActionKind,
   ProposedFeatures,
   SemanticTokensBuilder,
+  SymbolKind,
   TextDocuments,
   TextDocumentSyncKind,
   TextEdit,
@@ -44,10 +46,11 @@ import { TextDocument } from "vscode-languageserver-textdocument";
 import {
   analyze,
   assignmentLine,
-  classify,
   declarationLine,
   describe,
+  DocumentModel,
   memberAt,
+  model,
   readableType,
   Schema,
   suggest,
@@ -155,6 +158,7 @@ connection.onInitialize((_params: InitializeParams) => ({
     definitionProvider: true,
     typeDefinitionProvider: true,
     semanticTokensProvider: { legend: LEGEND, full: true },
+    documentSymbolProvider: true,
     codeActionProvider: { codeActionKinds: [CodeActionKind.QuickFix] },
     documentFormattingProvider: true,
   },
@@ -181,6 +185,7 @@ connection.onDidChangeConfiguration(async () => {
   /* The path to euicc may have changed, and with it the schema. */
   schemaOnce = undefined;
   asnCache = null;
+  models.clear();
   for (const d of documents.all()) void check(d, true);
 });
 
@@ -350,11 +355,11 @@ async function check(doc: TextDocument, full: boolean): Promise<void> {
   const rules: Diagnostic[] = [];
   for (const f of report.findings) {
     const line = Math.max(0, f.line - 1);
-    const character = Math.max(0, f.column - 1);
     const lineText = doc.getText({
       start: { line, character: 0 },
       end: { line: line + 1, character: 0 },
     });
+    const character = byteToUtf16(lineText, Math.max(0, f.column - 1));
     const d: Diagnostic = {
       severity:
         f.severity === "warning"
@@ -369,7 +374,11 @@ async function check(doc: TextDocument, full: boolean): Promise<void> {
       source: f.source ? `euicc (${f.source})` : "euicc",
       message: f.message,
     };
-    const extra = schema ? explain(schema, f, doc) : null;
+    /* explain() turns the column back into an offset, so it has to get the
+       converted one -- the finding's own is still bytes. */
+    const extra = schema
+      ? explain(schema, { ...f, line: line + 1, column: character + 1 }, doc)
+      : null;
     if (extra) {
       d.message = extra.message;
       if (extra.related) d.relatedInformation = [extra.related];
@@ -427,6 +436,24 @@ interface Explained {
   related?: DiagnosticRelatedInformation;
   /* An edit the editor can offer, at the start of the diagnostic's range. */
   fix?: { title: string; insert: string };
+}
+
+/*
+ * euicc counts a column in bytes from the start of the line; LSP counts UTF-16
+ * code units. On a line whose earlier characters are all ASCII the two agree,
+ * which is how the difference survived every test so far: one umlaut in a
+ * cstring shifts every position after it, and both the squiggle and the quick
+ * fix landed beside their token.
+ */
+function byteToUtf16(lineText: string, byteCol: number): number {
+  let bytes = 0;
+  let i = 0;
+  while (i < lineText.length && bytes < byteCol) {
+    const cp = lineText.codePointAt(i)!;
+    bytes += cp <= 0x7f ? 1 : cp <= 0x7ff ? 2 : cp <= 0xffff ? 3 : 4;
+    i += cp > 0xffff ? 2 : 1;
+  }
+  return i;
 }
 
 /*
@@ -750,6 +777,28 @@ connection.onCodeAction((params): CodeAction[] => {
   return out;
 });
 
+/* ---- the document, read once per version ------------------------------------ */
+
+/*
+ * One walk of the text yields what every identifier is and the tree of named
+ * braces, and both semantic tokens and the outline want it -- the editor asks
+ * for tokens at every visible change and for symbols right beside. Cached by
+ * document version, dropped on close, cleared when the schema reloads,
+ * because the schema is what the walk reads meaning from.
+ */
+const models = new Map<string, { version: number; m: DocumentModel }>();
+
+async function getModel(doc: TextDocument): Promise<DocumentModel | null> {
+  if (settingsReady) await settingsReady;
+  const schema = await loadSchema();
+  if (!schema) return null;
+  const hit = models.get(doc.uri);
+  if (hit && hit.version === doc.version) return hit.m;
+  const m = model(schema, doc.getText());
+  models.set(doc.uri, { version: doc.version, m });
+  return m;
+}
+
 /* ---- what each word is ------------------------------------------------------ */
 
 connection.languages.semanticTokens.on(async (params) => {
@@ -758,8 +807,8 @@ connection.languages.semanticTokens.on(async (params) => {
   if (!doc || doc.languageId !== "asn1-vn") return builder.build();
   if (settingsReady) await settingsReady;
 
-  const schema = await loadSchema();
-  if (!schema) return builder.build();
+  const m = await getModel(doc);
+  if (!m) return builder.build();
 
   /*
    * Only what the schema recognises is reported. A name it does not know keeps
@@ -767,11 +816,40 @@ connection.languages.semanticTokens.on(async (params) => {
    * never take one away, so a typo cannot be made to look like one this way.
    * What marks it is the diagnostic.
    */
-  for (const c of classify(schema, doc.getText())) {
+  for (const c of m.classified) {
     const at = doc.positionAt(c.offset);
     builder.push(at.line, at.character, c.length, KIND_TO_TOKEN[c.kind], 0);
   }
   return builder.build();
+});
+
+/* ---- the outline ------------------------------------------------------------- */
+
+/*
+ * The named braces, nested as written: thirty profile elements to navigate a
+ * 3235-line package by, each with the structures inside it. Leaf members stay
+ * out -- a line the eye finds on its own would bury the elements, 1861 to 30
+ * in a published profile.
+ */
+connection.onDocumentSymbol(async (params) => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc || doc.languageId !== "asn1-vn") return null;
+  const m = await getModel(doc);
+  if (!m) return null;
+
+  const toSymbol = (n: (typeof m.nodes)[number], depth: number): DocumentSymbol => ({
+    name: n.name,
+    detail: n.type ?? undefined,
+    /* A top-level node is one ProfileElement; everything below is a member. */
+    kind: depth === 0 ? SymbolKind.Struct : SymbolKind.Object,
+    range: { start: doc.positionAt(n.start), end: doc.positionAt(n.end) },
+    selectionRange: {
+      start: doc.positionAt(n.nameStart),
+      end: doc.positionAt(n.nameStart + n.nameLength),
+    },
+    children: n.children.map((k) => toSymbol(k, depth + 1)),
+  });
+  return m.nodes.map((n) => toSymbol(n, 0));
 });
 
 /* ---- going to the schema --------------------------------------------------- */
@@ -855,6 +933,7 @@ documents.onDidClose((e) => {
   pending.delete(e.document.uri);
   slots.delete(e.document.uri);
   fullChecked.delete(e.document.uri);
+  models.delete(e.document.uri);
   connection.sendDiagnostics({ uri: e.document.uri, diagnostics: [] });
 });
 

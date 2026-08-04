@@ -203,6 +203,44 @@ export interface Classified {
  * punctuation is missing or the word is a value standing alone. Here the
  * schema decides, and the editor is told rather than shown.
  */
+/*
+ * A named brace in the document: `header : {` down to its closing brace. The
+ * outline is these nodes and nothing else -- a leaf member is a line the eye
+ * finds on its own, and 1861 of them would bury the thirty elements a reader
+ * navigates by. A brace opened without a name, one element of a list, adds its
+ * children to the nearest named ancestor rather than a nameless entry.
+ */
+export interface Node {
+  /* The labels the brace was opened for: "mf", or "algoConfiguration :
+     algoParameter" where a CHOICE was selected on the way in. */
+  name: string;
+  /* The type whose members the braces hold, for the outline's detail. */
+  type: string | null;
+  nameStart: number;
+  nameLength: number;
+  start: number;
+  end: number;
+  children: Node[];
+}
+
+/*
+ * Everything a document holds, from one walk: what each identifier is, and the
+ * tree of named braces. Built once per document version and cached by the
+ * server -- semantic tokens ask on every visible change, and the outline asks
+ * alongside, so the walk should not run twice for one text.
+ */
+export interface DocumentModel {
+  classified: Classified[];
+  nodes: Node[];
+}
+
+export function model(schema: Schema, text: string): DocumentModel {
+  const classified: Classified[] = [];
+  const nodes: Node[] = [];
+  scan(schema, text, text.length, (c) => classified.push(c), nodes);
+  return { classified, nodes };
+}
+
 export function classify(schema: Schema, text: string): Classified[] {
   const out: Classified[] = [];
   scan(schema, text, text.length, (c) => out.push(c));
@@ -213,7 +251,8 @@ function scan(
   schema: Schema,
   text: string,
   stop: number,
-  emit?: (c: Classified) => void
+  emit?: (c: Classified) => void,
+  roots?: Node[]
 ): Context {
   /*
    * The root frame encloses no braces: a file is a list of ProfileElement
@@ -226,6 +265,12 @@ function scan(
   /* The type that declares `expect`; null while the root value is expected. */
   let owner: string | null = null;
   let labels: string[] = [];
+  /* Where the first of the current labels begins, for the outline's name. */
+  let labelStart = -1;
+  let labelLength = 0;
+  /* The named nodes whose braces are open, innermost last. */
+  const openNodes: Node[] = [];
+  const nodeDepth: (Node | null)[] = [];
   const top = () => stack[stack.length - 1];
 
   let i = 0;
@@ -270,6 +315,7 @@ function scan(
       expect = rootMember;
       owner = null;
       labels = [];
+      labelStart = -1;
       i += 3;
       continue;
     }
@@ -293,21 +339,50 @@ function scan(
         used: [],
         labels,
       });
+      if (roots) {
+        if (labels.length && labelStart >= 0) {
+          const node: Node = {
+            name: labels.join(" : "),
+            type: next && schema.types[next] ? readableType(next) : null,
+            nameStart: labelStart,
+            nameLength: labelLength,
+            start: labelStart,
+            end: stop,
+            children: [],
+          };
+          (openNodes.length ? openNodes[openNodes.length - 1].children : roots)
+            .push(node);
+          openNodes.push(node);
+          nodeDepth.push(node);
+        } else {
+          nodeDepth.push(null);
+        }
+      }
       expect = null;
       labels = [];
+      labelStart = -1;
       i++;
       continue;
     }
     if (c === "}") {
       if (stack.length > 1) stack.pop();
+      if (roots && nodeDepth.length) {
+        const n = nodeDepth.pop();
+        if (n) {
+          n.end = i + 1;
+          openNodes.pop();
+        }
+      }
       expect = null;
       labels = [];
+      labelStart = -1;
       i++;
       continue;
     }
     if (c === ",") {
       expect = null;
       labels = [];
+      labelStart = -1;
       i++;
       continue;
     }
@@ -333,6 +408,7 @@ function scan(
         const sc = nameScope(schema, top().type);
         const m = sc?.type.members?.find((x) => x.name === word);
         top().used.push(word);
+        if (labels.length === 0) { labelStart = i; labelLength = word.length; }
         labels.push(word);
         owner = sc?.owner ?? null;
         /*
@@ -346,6 +422,7 @@ function scan(
                  || schema.types[expect.type]?.kind === "OPEN TYPE") {
         const alt: Member | undefined =
           schema.types[expect.type].members?.find((x) => x.name === word);
+        if (labels.length === 0) { labelStart = i; labelLength = word.length; }
         labels.push(word);
         owner = expect.type;
         if (alt) here("alternative");
