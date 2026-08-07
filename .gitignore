@@ -2,6 +2,8 @@ build/
 /euicc
 *.o
 *.dSYM/
+.DS_Store
+.idea/
 
 # the packaged extension
 editors/vscode/*.vsix
