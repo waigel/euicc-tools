@@ -63,7 +63,7 @@ XML_CFLAGS := $(shell xml2-config --cflags 2>/dev/null) \
 XML_LIBS   := $(shell xml2-config --libs 2>/dev/null) \
               $(shell pkg-config --libs libxslt 2>/dev/null || echo -lxslt)
 
-INC := -Isrc -I$(VN)/include -I$(VN)/src -I$(SKELDIR) -I$(RSP)/include $(XML_CFLAGS)
+INC := -Isrc -Ibuild -I$(VN)/include -I$(VN)/src -I$(SKELDIR) -I$(RSP)/include $(XML_CFLAGS)
 # The schema source, so `euicc schema` can say where a type is declared. Only
 # a location: the schema itself is read from asn1c's descriptors and never
 # from this file.
@@ -71,14 +71,14 @@ ASN     := $(SCHEMA)/profile-3.4.1.asn
 
 # The number is what the language server compares against its minimum, so it
 # moves when the CLI's surface does. The commit is for a bug report, and a
-# build outside a checkout says so instead of inventing one.
+# build outside a checkout says so instead of inventing one. The SHA is no
+# longer a -D here: see build/gitsha.h below for why.
 VERSION := 1.1
-GITSHA  := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 
 DEF := -DEUICC_RULES_DIR='"$(abspath $(RULES))"' \
        -DEUICC_SKEL_DIR='"$(SKEL)"' \
        -DEUICC_SCHEMA_FILE='"$(abspath $(ASN))"' \
-       -DEUICC_VERSION='"$(VERSION)"' -DEUICC_GITSHA='"$(GITSHA)"'
+       -DEUICC_VERSION='"$(VERSION)"'
 
 # -std=c99 makes glibc hide everything younger than C89: strdup, getline,
 # glob and timegm lose their declarations, an implicit declaration returns
@@ -138,16 +138,55 @@ build/gen/.stamp: $(DIST)/ProfileElement.h
 	    -c $(abspath $(GEN_SRCS))
 	@touch $@
 
+# GITSHA used to be evaluated once, at Make's parse time, and baked in with
+# -DEUICC_GITSHA; that value never changed again for the rest of this
+# invocation, so a commit that touched no source left the binary reporting
+# the PREVIOUS commit -- exactly the confusion the SHA exists to prevent,
+# since it is what points a bug report at the build that produced it.
+#
+# gitsha-force is phony, so this recipe runs on every build and asks git
+# fresh each time -- but it only overwrites build/gitsha.h when the SHA text
+# actually changed, so a build where HEAD did not move leaves the header's
+# mtime alone and does not force euicc to relink for nothing.
+.PHONY: gitsha-force
+gitsha-force:
+
+build/gitsha.h: gitsha-force
+	@mkdir -p build
+	@sha="$$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"; \
+	 new='#define EUICC_GITSHA "'"$$sha"'"'; \
+	 if [ ! -f $@ ] || [ "$$(cat $@)" != "$$new" ]; then \
+	     echo "$$new" > $@; \
+	 fi
+
 # ---- euicc-rsp --------------------------------------------------------------
 # euicc-rsp builds its own library, its own codec (from rsp-2.5.asn) and its
 # own mbedTLS dependency; asked for by name, the same way this Makefile asks
 # euicc-schema's submodule to build the SAIP codec above. Passed the asn1c
 # this Makefile already built, so the generated runtime -- ber_decoder.c,
 # INTEGER.c, OCTET_STRING.c, the PKIX types both projects need -- comes out
-# byte for byte the same as euicc-schema's own dist. That is what makes
+# byte for byte the same as euicc-schema's own dist (agree except for the
+# known-benign differences the guard below allows). That is what makes
 # build/librsp-full.a below possible: two copies of the same code, not two
 # different ones that merely happen to agree.
-$(RSP_LIB): $(ASN1C)/asn1c/asn1c
+#
+# $(RSP_LIB) used to depend only on the asn1c binary, so once it existed
+# nothing here ever asked euicc-rsp to rebuild it again: touching
+# vendor/euicc-rsp/src/rsp_es10.c or vendor/euicc-rsp/include/rsp.h and
+# running "make -n euicc" showed nothing to do. The realistic way that
+# bites is a submodule pointer bump -- checkout refreshes the sources,
+# librsp.a keeps its old mtime, and the binary links the previous library.
+# rsp-lib-force makes this recipe run on every build, delegating the actual
+# staleness decision to euicc-rsp's own Makefile, which tracks its sources
+# AND both its headers (include/rsp.h, src/rsp_internal.h) in its %.o rule.
+# `ar` there only touches librsp.a's mtime when a member object actually
+# changed, so a build with nothing to do here stays cheap: the recipe runs,
+# finds nothing stale, and the mtime -- and everything downstream of it --
+# is left alone.
+.PHONY: rsp-lib-force
+rsp-lib-force:
+
+$(RSP_LIB): $(ASN1C)/asn1c/asn1c rsp-lib-force
 	@test -e $(RSP)/vendor/mbedtls/.git || { \
 	    echo "the euicc-rsp submodule's own submodules are missing:" >&2; \
 	    echo "  git -C $(RSP) submodule update --init --recursive" >&2; \
@@ -184,12 +223,14 @@ build/librsp-full.a: build/rsp-objs/.stamp
 
 # ---- the binary ------------------------------------------------------------
 
-# Makefile is a dependency on purpose: VERSION and GITSHA are compiled in, so
-# an edit here has to rebuild -- without this, bumping VERSION produced a
+# Makefile is a dependency on purpose: VERSION is compiled in via -D, so an
+# edit here has to rebuild -- without this, bumping VERSION produced a
 # binary that still answered with the old one, which is precisely the
-# confusion `euicc version` exists to prevent.
+# confusion `euicc version` exists to prevent. GITSHA takes the same care
+# through build/gitsha.h instead, since it changes on every commit rather
+# than on a Makefile edit.
 euicc: $(OWN_SRCS) src/euicc.h build/vn_annotations.c build/gen/.stamp \
-       build/librsp-full.a Makefile
+       build/librsp-full.a build/gitsha.h Makefile
 	@test -n "$(XML_LIBS)" || { \
 	    echo "libxml2 and libxslt are needed; install them and try again" >&2; \
 	    exit 1; }
