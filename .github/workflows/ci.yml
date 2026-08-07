@@ -21,11 +21,16 @@ jobs:
       # bison and flex are for asn1c's parser. python3-lxml is not an
       # interpreter for anything here: it is where the Makefile finds the ISO
       # Schematron XSLT transforms, the same place a local build reads them.
+      # libpcsclite-dev is euicc-rsp's: `euicc card` links src/rsp_pcsc.c's
+      # PC/SC transport transitively now that vendor/euicc-rsp is a
+      # submodule, and macOS shipping PC/SC in its SDK hid this dependency
+      # from every local build until a Linux runner needed winscard.h and
+      # did not have it.
       - name: install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y autoconf automake libtool bison flex \
-            libxml2-dev libxslt1-dev python3-lxml
+            libxml2-dev libxslt1-dev python3-lxml libpcsclite-dev
 
       - name: build euicc
         run: make

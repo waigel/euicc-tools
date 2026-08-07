@@ -47,6 +47,9 @@ make install PREFIX=~/.local     # or PREFIX=/usr/local with sudo
 You need libxml2 and libxslt. macOS and every Linux distribution ship them.
 The build finds the ISO Schematron transforms in an installed `python3-lxml`
 package. If the transforms are in a different location, name it with `--skel`.
+`euicc card` links PC/SC, for talking to a reader: macOS ships it in the SDK,
+but Linux needs the pcsc-lite headers installed (`libpcsclite-dev` on Debian
+and Ubuntu).
 
 The build compiles the path of the rule set and the path of the transforms
 into the binary, as absolute paths. If you move the checkout, use `--rules`
