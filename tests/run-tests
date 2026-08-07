@@ -420,7 +420,13 @@ command -v bash >/dev/null && { bash -n "$tmp/comp.bash" \
 out=$("$E" card info --reader "no-such-reader-euicc-tools-tests" 2>&1); rc=$?
 [ $rc -eq 2 ] && ok "card info: an unknown reader name is exit 2" \
               || bad "card info: an unknown reader name is exit 2 (got $rc)"
-echo "$out" | grep -qi "reader" \
+# grep -qi "reader" used to be the assertion here, and could not fail: card.c's
+# own wrapper message ("euicc: no card reader is available") contains the word
+# "reader" on every open_card failure, present or not, unknown name or none at
+# all. rsp_pcsc.c now names the reader it actually failed to find, so assert
+# on that name appearing verbatim instead of on a word neither message could
+# ever omit.
+echo "$out" | grep -q "no-such-reader-euicc-tools-tests" \
   && ok "card info: an unknown reader name is named in the message" \
   || bad "card info: an unknown reader name is named in the message"
 
