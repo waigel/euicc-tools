@@ -119,12 +119,25 @@ cmd_card_info(const char *reader, const char *replay, const char *record,
 
     rsp_card_info_t info;
     memset(&info, 0, sizeof info);
-    int rc = rsp_card_read_info(&t, &info);
+    /* Three outcomes, not two. A card whose ISD-R will not even be selected
+       is very likely not an eUICC, or has it locked; an eUICC that accepted
+       the selection and then refused a request is a different situation
+       with a different next step. Saying "the card refused to answer" to
+       both, as this did, sends the reader looking in the wrong place. */
+    int no_isdr = 0;
+    int rc = rsp_card_read_info(&t, &info, &no_isdr);
     t.close(&t);
 
     if(rc != 0) {
-        fprintf(stderr, "euicc: the card %s\n",
-                rc == -1 ? "refused to answer" : "could not be asked");
+        if(no_isdr) {
+            fprintf(stderr, "euicc: the card refused to select the ISD-R. It "
+                            "may not be an eUICC, or its ISD-R is locked.\n");
+        } else if(rc == -1) {
+            fprintf(stderr, "euicc: the eUICC refused one of the requests it "
+                            "was asked.\n");
+        } else {
+            fprintf(stderr, "euicc: the card could not be asked.\n");
+        }
         return 2;
     }
 
