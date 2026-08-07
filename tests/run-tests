@@ -409,15 +409,20 @@ command -v bash >/dev/null && { bash -n "$tmp/comp.bash" \
 [ $? -eq 2 ] && ok "completion: an unknown shell is refused" \
              || bad "completion: an unknown shell is refused"
 
-# card: without a reader the answer is "could not answer", never a verdict.
-# This runs in CI, where there is certainly no reader, so it pins the
-# distinction the exit contract exists to make.
-out=$("$E" card info 2>&1); rc=$?
-[ $rc -eq 2 ] && ok "card info without a reader is exit 2" \
-              || bad "card info without a reader is exit 2 (got $rc)"
+# card: "could not answer" is never a verdict. The first version of this
+# test invoked plain "card info" and relied on no reader being attached --
+# true in CI and nowhere else, so it failed on any desk that actually has
+# the OMNIKEY plugged in (and, as fixed here, would just as wrongly have
+# passed in CI for the wrong reason). Naming a reader that cannot exist
+# instead drives the same -2/"could not be asked" path deterministically,
+# through the real PC/SC stack, regardless of what is or is not plugged in:
+# SCardConnect answers SCARD_E_UNKNOWN_READER either way.
+out=$("$E" card info --reader "no-such-reader-euicc-tools-tests" 2>&1); rc=$?
+[ $rc -eq 2 ] && ok "card info: an unknown reader name is exit 2" \
+              || bad "card info: an unknown reader name is exit 2 (got $rc)"
 echo "$out" | grep -qi "reader" \
-  && ok "card info names the missing reader" \
-  || bad "card info names the missing reader"
+  && ok "card info: an unknown reader name is named in the message" \
+  || bad "card info: an unknown reader name is named in the message"
 
 # A recording stands in for a card, so the happy path is testable in CI.
 "$E" card info --replay "$root/vendor/euicc-rsp/testdata/cards/omnikey-info.log" >/dev/null 2>&1 \
