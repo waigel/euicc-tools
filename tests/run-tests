@@ -462,11 +462,89 @@ echo "$out" | grep -qi "does not trust" \
 [ $? -eq 2 ] && ok "card info: --replay and --reader together is exit 2" \
              || bad "card info: --replay and --reader together is exit 2"
 
-# card profiles is a deliberate, documented gap (src/card.c) -- it must say
-# so and answer 2, not silently invent a profile list.
-"$E" card profiles --replay "$root/vendor/euicc-rsp/testdata/cards/omnikey-info.log" >/dev/null 2>&1
-[ $? -eq 2 ] && ok "card profiles: the documented gap is exit 2" \
-             || bad "card profiles: the documented gap is exit 2"
+# card profiles: this project's own test eUICC (the recording above) has
+# nothing installed at all -- a real and complete answer, exit 0, not a
+# failure to find anything.
+out=$("$E" card profiles --replay "$root/vendor/euicc-rsp/testdata/cards/omnikey-profiles.log" 2>&1); rc=$?
+[ $rc -eq 0 ] && ok "card profiles: an empty list is exit 0, not a failure" \
+             || bad "card profiles: an empty list is exit 0, not a failure (got $rc)"
+echo "$out" | grep -qi "no profiles" \
+  && ok "card profiles: the human output says so" \
+  || bad "card profiles: the human output says so"
+
+# The populated case, hand-built (testdata/cards/README.md in euicc-rsp
+# explains why: the real card above has nothing to pin actual content
+# against). Two entries; --json names the fields a script would grep for.
+out=$("$E" card profiles --replay "$root/vendor/euicc-rsp/testdata/cards/synthetic-profiles.log" --json 2>/dev/null)
+rc=$?
+[ $rc -eq 0 ] && ok "card profiles: the populated list is exit 0" \
+             || bad "card profiles: the populated list is exit 0 (got $rc)"
+echo "$out" | grep -q '"iccid": "8944058925001234567F"' \
+  && ok "card profiles --json names the first entry's iccid" \
+  || bad "card profiles --json names the first entry's iccid"
+echo "$out" | grep -q '"profileName": "Test Telco Postpaid"' \
+  && ok "card profiles --json names the first entry's profileName" \
+  || bad "card profiles --json names the first entry's profileName"
+echo "$out" | grep -q '"iccid": "8944058925009876543F"' \
+  && ok "card profiles --json names the second entry's iccid" \
+  || bad "card profiles --json names the second entry's iccid"
+echo "$out" | grep -q '"profileNickname": null' \
+  && ok "card profiles --json: an absent field is null, not a stray guess" \
+  || bad "card profiles --json: an absent field is null, not a stray guess"
+
+# card profiles is the first command whose output embeds text the card
+# itself chose (profileNickname, serviceProviderName and profileName are
+# UTF8String -- see src/card.c's json_string). Every other fixture in
+# testdata/cards happens to hold nothing but plain ASCII letters and
+# spaces, so a json_string that escaped nothing at all would pass all of
+# them. This recording carries the characters a JSON string cannot hold
+# raw, and the assertions below pin the escaped forms exactly.
+hostile="$root/vendor/euicc-rsp/testdata/cards/synthetic-profiles-hostile-text.log"
+out=$("$E" card profiles --replay "$hostile" --json 2>/dev/null); rc=$?
+[ $rc -eq 0 ] && ok "card profiles: card-chosen text is exit 0" \
+             || bad "card profiles: card-chosen text is exit 0 (got $rc)"
+# printf, not echo: /bin/sh's echo expands backslash escapes, so it turns
+# the "\\n" and "\t" this output is being checked for into a real
+# backslash-n and a real tab before grep ever sees them -- mangling
+# exactly the characters under test, and failing three assertions whose
+# subject was correct all along. Every other assertion in this file greps
+# content with no backslash in it and is unaffected; anything added here
+# that does carry one needs printf too.
+#
+# grep -F, not a pattern: every expected line is pure ASCII precisely
+# because the escaping worked, so an exact fixed-string match is
+# available and is the strongest pin there is. A raw tab or newline
+# reaching the output would break these matches rather than pass them.
+printf %s\\n "$out" | grep -qF '"profileNickname": "He said \"hi\" \\n is not a newline\t\u0001"' \
+  && ok "card profiles --json escapes quote, backslash, tab and control alike" \
+  || bad "card profiles --json escapes quote, backslash, tab and control alike"
+printf %s\\n "$out" | grep -qF '"serviceProviderName": "Acme\nTelco"' \
+  && ok "card profiles --json escapes a newline the card sent" \
+  || bad "card profiles --json escapes a newline the card sent"
+# Multi-byte UTF-8 needs no escaping and must survive unmangled: an
+# escaper working a byte at a time would corrupt this one.
+printf %s\\n "$out" | grep -qF '"profileName": "Grüße 日本"' \
+  && ok "card profiles --json leaves multi-byte UTF-8 intact" \
+  || bad "card profiles --json leaves multi-byte UTF-8 intact"
+
+# The error variant: a healthy card cannot itself produce this (an
+# unrestricted request has nothing incorrect for it to complain about),
+# so testdata/cards/omnikey-profiles-error.log is a hand-edited copy of
+# the real capture -- see its own header. The eUICC answered and refused:
+# exit 1, not 0 and not 2.
+out=$("$E" card profiles --replay "$root/vendor/euicc-rsp/testdata/cards/omnikey-profiles-error.log" 2>&1); rc=$?
+[ $rc -eq 1 ] && ok "card profiles: a decoded refusal is exit 1, not 0 or 2" \
+             || bad "card profiles: a decoded refusal is exit 1, not 0 or 2 (got $rc)"
+echo "$out" | grep -qi "incorrectInputValues" \
+  && ok "card profiles: the human output names which error" \
+  || bad "card profiles: the human output names which error"
+
+# --replay and --reader together is exit 2 for profiles too, the same
+# refusal card info gives -- cmd_card's own flag validation runs before
+# either subcommand, so this is one code path, not two to keep in sync.
+"$E" card profiles --replay "$root/vendor/euicc-rsp/testdata/cards/omnikey-profiles.log" --reader foo >/dev/null 2>&1
+[ $? -eq 2 ] && ok "card profiles: --replay and --reader together is exit 2" \
+             || bad "card profiles: --replay and --reader together is exit 2"
 
 printf '\n%d ok, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -775,7 +775,15 @@ usage(void) {
         "the card answered and trusts this project's test Certificate\n"
         "Issuer (its test credentials will work with this card), 1 the card\n"
         "answered and does not, 2 the question could not be asked at all --\n"
-        "no reader, no card, no ISD-R, or an answer that made no sense.\n",
+        "no reader, no card, no ISD-R, or an answer that made no sense.\n"
+        "\n"
+        "card profiles' exit code answers a different question, not a\n"
+        "verdict about trust: 0 means the profile list was retrieved,\n"
+        "whatever it contains -- an empty list is a complete and real\n"
+        "answer, not this command failing to find anything. 1 means the\n"
+        "eUICC answered and refused the request. 2 means the question\n"
+        "could not be asked at all -- no reader, no card, no ISD-R, or an\n"
+        "answer that made no sense.\n",
         stderr);
 }
 

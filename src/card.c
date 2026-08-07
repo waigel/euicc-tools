@@ -60,6 +60,32 @@ json_hex(const uint8_t *b, size_t n) {
     putchar('"');
 }
 
+/* card info never printed a string a card chose the content of -- svn is
+   this program's own snprintf ("%u.%u.%u"), digits and dots only. card
+   profiles is the first command whose JSON output embeds text the card
+   itself sent (profileNickname, serviceProviderName, profileName, all
+   UTF8String), so it is also the first that needs to escape it: a
+   nickname containing '"' or '\' would otherwise end the JSON string
+   early or corrupt it, and control characters are not valid inside a
+   JSON string unescaped either (RFC 8259 section 7). */
+static void
+json_string(const char *s) {
+    putchar('"');
+    for(const unsigned char *p = (const unsigned char *)s; *p; p++) {
+        switch(*p) {
+        case '"':  fputs("\\\"", stdout); break;
+        case '\\': fputs("\\\\", stdout); break;
+        case '\n': fputs("\\n", stdout); break;
+        case '\r': fputs("\\r", stdout); break;
+        case '\t': fputs("\\t", stdout); break;
+        default:
+            if(*p < 0x20) printf("\\u%04x", *p);
+            else putchar(*p);
+        }
+    }
+    putchar('"');
+}
+
 /*
  * The transport a card command actually talks to: --replay substitutes a
  * recording for a reader (what lets the happy path run in CI, and what a
@@ -176,27 +202,154 @@ cmd_card_info(const char *reader, const char *replay, const char *record,
 }
 
 /*
- * ProfileInfoListResponse decoding is the same shape rsp_card_read_info
- * already handles for EUICCInfo2, but rsp.h exposes no function that
- * drives that particular ES10 exchange -- only rsp_card_read_info's
- * EUICCInfo2/EID pair. Rather than reach past include/rsp.h into
- * euicc-rsp's own ES10 request layer or its generated codec from this
- * side of the library boundary, this stays an honest gap: it says so and
- * asks for nothing, instead of a command that talks to a card and prints
- * an answer with no library function behind it.
+ * card profiles: the list of profiles already installed on the eUICC,
+ * from rsp_card_read_profiles (rsp.h) -- GetProfilesInfo asked with no
+ * search criteria, "every profile."
+ *
+ * card info's exit code is a verdict about trust; this one is not, and
+ * that difference is deliberate, not an oversight: card info's 0 means
+ * "our test credentials will work with this card," a question with a
+ * real yes/no answer. Nothing about the profile list is a verdict this
+ * project holds an opinion on -- an empty list is not a worse answer
+ * than a full one, it is a card with nothing installed, which is a
+ * complete and useful thing to know. So here 0 means the list was
+ * retrieved, whatever it contains, including empty; 1 means the ISD-R
+ * answered and refused the request (rsp_card_read_profiles' -1, a
+ * decoded ProfileInfoListError -- see *err below); 2 means the question
+ * could not be asked at all: no reader, no card, no ISD-R, or an answer
+ * this project's decoder cannot make sense of.
  */
+static int
+profile_state_name(long v, const char **name) {
+    if(v == 0) { *name = "disabled"; return 1; }
+    if(v == 1) { *name = "enabled"; return 1; }
+    *name = NULL;
+    return 0;
+}
+
+static int
+profile_class_name(long v, const char **name) {
+    if(v == 0) { *name = "test"; return 1; }
+    if(v == 1) { *name = "provisioning"; return 1; }
+    if(v == 2) { *name = "operational"; return 1; }
+    *name = NULL;
+    return 0;
+}
+
+/* incorrectInputValues(1) and undefinedError(127) are ProfileInfoListError's
+   only two named values (rsp-2.5.asn, restated in include/rsp.h's own
+   comment on rsp_card_read_profiles); anything else is an extension this
+   project's decoder does not name either, so it prints the bare number
+   rather than guess at a label. */
+static const char *
+profile_list_error_name(long err) {
+    if(err == 1) return "incorrectInputValues";
+    if(err == 127) return "undefinedError";
+    return NULL;
+}
+
+static void
+print_profile_human(const rsp_profile_info_t *p) {
+    fputs("ICCID    ", stdout);
+    if(p->have_iccid) print_hex(p->iccid, sizeof p->iccid);
+    else fputs("(none)", stdout);
+    putchar('\n');
+
+    fputs("isdpAid  ", stdout);
+    if(p->have_isdp_aid) print_hex(p->isdp_aid, p->isdp_aid_len);
+    else fputs("(none)", stdout);
+    putchar('\n');
+
+    fputs("state    ", stdout);
+    if(p->have_profile_state) {
+        const char *name;
+        if(profile_state_name(p->profile_state, &name)) printf("%s", name);
+        else printf("%ld", p->profile_state);
+    } else fputs("(none)", stdout);
+    putchar('\n');
+
+    fputs("class    ", stdout);
+    if(p->have_profile_class) {
+        const char *name;
+        if(profile_class_name(p->profile_class, &name)) printf("%s", name);
+        else printf("%ld", p->profile_class);
+    } else fputs("(none)", stdout);
+    putchar('\n');
+
+    printf("nickname %s\n", p->profile_nickname ? p->profile_nickname : "(none)");
+    printf("provider %s\n", p->service_provider_name ? p->service_provider_name : "(none)");
+    printf("name     %s\n", p->profile_name ? p->profile_name : "(none)");
+}
+
+static void
+print_profile_json(const rsp_profile_info_t *p) {
+    printf("  {\n   \"iccid\": ");
+    if(p->have_iccid) json_hex(p->iccid, sizeof p->iccid); else fputs("null", stdout);
+    printf(",\n   \"isdpAid\": ");
+    if(p->have_isdp_aid) json_hex(p->isdp_aid, p->isdp_aid_len); else fputs("null", stdout);
+    printf(",\n   \"profileState\": ");
+    if(p->have_profile_state) printf("%ld", p->profile_state); else fputs("null", stdout);
+    printf(",\n   \"profileClass\": ");
+    if(p->have_profile_class) printf("%ld", p->profile_class); else fputs("null", stdout);
+    printf(",\n   \"profileNickname\": ");
+    if(p->profile_nickname) json_string(p->profile_nickname); else fputs("null", stdout);
+    printf(",\n   \"serviceProviderName\": ");
+    if(p->service_provider_name) json_string(p->service_provider_name); else fputs("null", stdout);
+    printf(",\n   \"profileName\": ");
+    if(p->profile_name) json_string(p->profile_name); else fputs("null", stdout);
+    printf("\n  }");
+}
+
 static int
 cmd_card_profiles(const char *reader, const char *replay, const char *record,
                    int as_json) {
-    (void)reader;
-    (void)replay;
-    (void)record;
-    (void)as_json;
-    fprintf(stderr,
-            "euicc: card profiles is not implemented -- rsp.h has no "
-            "function that reads a card's profile list yet, only "
-            "rsp_card_read_info's EUICCInfo2/EID pair\n");
-    return 2;
+    rsp_transport_t t;
+    if(open_card(reader, replay, record, &t) != 0) return 2;
+
+    rsp_profile_info_t *profiles = NULL;
+    size_t count = 0;
+    long err = 0;
+    int no_isdr = 0;
+    int rc = rsp_card_read_profiles(&t, &profiles, &count, &err, &no_isdr);
+    t.close(&t);
+
+    if(rc != 0) {
+        if(no_isdr) {
+            fprintf(stderr, "euicc: the card refused to select the ISD-R. It "
+                            "may not be an eUICC, or its ISD-R is locked.\n");
+        } else if(rc == -1) {
+            const char *name = profile_list_error_name(err);
+            if(name) {
+                fprintf(stderr, "euicc: the eUICC refused the profile list "
+                                "request: %s.\n", name);
+            } else {
+                fprintf(stderr, "euicc: the eUICC refused the profile list "
+                                "request (error %ld).\n", err);
+            }
+        } else {
+            fprintf(stderr, "euicc: the card could not be asked.\n");
+        }
+        return rc == -1 ? 1 : 2;
+    }
+
+    if(as_json) {
+        printf("{\n \"profiles\": [\n");
+        for(size_t i = 0; i < count; i++) {
+            if(i) fputs(",\n", stdout);
+            print_profile_json(&profiles[i]);
+        }
+        printf("\n ]\n}\n");
+    } else if(count == 0) {
+        fputs("no profiles are installed on this card\n", stdout);
+    } else {
+        for(size_t i = 0; i < count; i++) {
+            if(i) putchar('\n');
+            print_profile_human(&profiles[i]);
+        }
+    }
+
+    rsp_card_profiles_free(profiles, count);
+    return 0;
 }
 
 int
