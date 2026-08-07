@@ -66,6 +66,18 @@ int diff_report(struct ProfileElement **want, int want_n, xmlDocPtr want_xml,
                 struct ProfileElement **have, int have_n, xmlDocPtr have_xml,
                 int as_json);
 
+/* ---- card ------------------------------------------------------------ */
+
+/*
+ * euicc card info / euicc card profiles: what a physical eUICC (or a
+ * recording standing in for one, over --replay) says about itself, and
+ * whether it trusts this project's test Certificate Issuer. argv[0] is
+ * the subcommand; argc/argv cover everything after "card" on the command
+ * line, including it. See src/card.c's own header for the exit code's
+ * exact meaning -- it carries a verdict, not just an outcome.
+ */
+int cmd_card(int argc, char **argv);
+
 /* ---- schema -------------------------------------------------------------- */
 
 /*

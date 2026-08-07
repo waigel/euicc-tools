@@ -409,5 +409,53 @@ command -v bash >/dev/null && { bash -n "$tmp/comp.bash" \
 [ $? -eq 2 ] && ok "completion: an unknown shell is refused" \
              || bad "completion: an unknown shell is refused"
 
+# card: without a reader the answer is "could not answer", never a verdict.
+# This runs in CI, where there is certainly no reader, so it pins the
+# distinction the exit contract exists to make.
+out=$("$E" card info 2>&1); rc=$?
+[ $rc -eq 2 ] && ok "card info without a reader is exit 2" \
+              || bad "card info without a reader is exit 2 (got $rc)"
+echo "$out" | grep -qi "reader" \
+  && ok "card info names the missing reader" \
+  || bad "card info names the missing reader"
+
+# A recording stands in for a card, so the happy path is testable in CI.
+"$E" card info --replay "$root/vendor/euicc-rsp/testdata/cards/omnikey-info.log" >/dev/null 2>&1 \
+  && ok "card info reads a recording" || bad "card info reads a recording"
+
+"$E" card info --replay "$root/vendor/euicc-rsp/testdata/cards/omnikey-info.log" --json 2>/dev/null \
+  | grep -q '"eid"' && ok "card info --json names the eid" \
+                    || bad "card info --json names the eid"
+
+# This project's own test eUICC (the recording above) trusts our test CI:
+# the whole round's own reason for existing is that the exit code says so.
+"$E" card info --replay "$root/vendor/euicc-rsp/testdata/cards/omnikey-info.log" >/dev/null 2>&1
+[ $? -eq 0 ] && ok "card info: our test card trusts our test CI, exit 0" \
+             || bad "card info: our test card trusts our test CI, exit 0"
+
+# The exit contract can fail, not just succeed: tests/card-no-test-ci.log is
+# the same recording with our test CI's identifier edited out of the list
+# rsp_card_trusts is asked about (see that file's own header for exactly
+# what changed). The card still answers -- this is a real "no", exit 1,
+# not "could not be asked".
+out=$("$E" card info --replay "$root/tests/card-no-test-ci.log" 2>&1); rc=$?
+[ $rc -eq 1 ] && ok "card info: an edited-out CI is exit 1, not 0" \
+             || bad "card info: an edited-out CI is exit 1, not 0 (got $rc)"
+echo "$out" | grep -qi "does not trust" \
+  && ok "card info: the human output says the card does not trust our CI" \
+  || bad "card info: the human output says the card does not trust our CI"
+
+# --replay and --reader name two different transports; the command refuses
+# to guess which one is meant rather than silently picking one.
+"$E" card info --replay "$root/vendor/euicc-rsp/testdata/cards/omnikey-info.log" --reader foo >/dev/null 2>&1
+[ $? -eq 2 ] && ok "card info: --replay and --reader together is exit 2" \
+             || bad "card info: --replay and --reader together is exit 2"
+
+# card profiles is a deliberate, documented gap (src/card.c) -- it must say
+# so and answer 2, not silently invent a profile list.
+"$E" card profiles --replay "$root/vendor/euicc-rsp/testdata/cards/omnikey-info.log" >/dev/null 2>&1
+[ $? -eq 2 ] && ok "card profiles: the documented gap is exit 2" \
+             || bad "card profiles: the documented gap is exit 2"
+
 printf '\n%d ok, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

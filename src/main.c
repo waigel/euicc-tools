@@ -641,6 +641,7 @@ cmd_completion(const char *shell) {
 "    'diff:what separates a source file from a package'\n"
 "    'schema:the schema as JSON, for an editor'\n"
 "    'fmt:value notation laid out, one member to a line'\n"
+"    'card:ask a physical eUICC, or a recording, what it is'\n"
 "    'version:what this binary is'\n"
 "    'completion:a completion script for zsh or bash'\n"
 "  )\n"
@@ -650,6 +651,17 @@ cmd_completion(const char *shell) {
 "  fi\n"
 "  case $words[2] in\n"
 "    completion) _values 'shell' zsh bash ;;\n"
+"    card)\n"
+"      if (( CURRENT == 3 )); then\n"
+"        _values 'card subcommand' info profiles\n"
+"      else\n"
+"        _arguments -s \\\n"
+"          '--reader[the reader to use]:reader' \\\n"
+"          '--replay[answer from a recording instead of a reader]:file:_files' \\\n"
+"          '--record[also write every exchange to a file]:file:_files' \\\n"
+"          '--json[one JSON object]'\n"
+"      fi\n"
+"      ;;\n"
 "    *) _arguments -s \\\n"
 "         '-o[write here instead of to stdout]:file:_files' \\\n"
 "         '-t[the input is value notation]' \\\n"
@@ -673,11 +685,19 @@ cmd_completion(const char *shell) {
 "_euicc() {\n"
 "  local cur=\"${COMP_WORDS[COMP_CWORD]}\"\n"
 "  if [ \"$COMP_CWORD\" -eq 1 ]; then\n"
-"    COMPREPLY=($(compgen -W \"build show check diff schema fmt version completion\" -- \"$cur\"))\n"
+"    COMPREPLY=($(compgen -W \"build show check diff schema fmt card version completion\" -- \"$cur\"))\n"
 "    return\n"
 "  fi\n"
 "  if [ \"${COMP_WORDS[1]}\" = completion ]; then\n"
 "    COMPREPLY=($(compgen -W \"zsh bash\" -- \"$cur\"))\n"
+"    return\n"
+"  fi\n"
+"  if [ \"${COMP_WORDS[1]}\" = card ]; then\n"
+"    if [ \"$COMP_CWORD\" -eq 2 ]; then\n"
+"      COMPREPLY=($(compgen -W \"info profiles\" -- \"$cur\"))\n"
+"    else\n"
+"      COMPREPLY=($(compgen -W \"--reader --replay --record --json\" -- \"$cur\"))\n"
+"    fi\n"
 "    return\n"
 "  fi\n"
 "  case \"$cur\" in\n"
@@ -699,6 +719,7 @@ usage(void) {
     fputs(
         "usage: euicc <command> [options] [file]\n"
         "       euicc diff <source> <package>\n"
+        "       euicc card info|profiles [options]\n"
         "\n"
         "  build    value notation in, DER out\n"
         "  show     DER in, value notation out\n"
@@ -706,6 +727,7 @@ usage(void) {
         "  diff     what separates a source file from a package\n"
         "  schema   the schema as JSON, for an editor\n"
         "  fmt      value notation laid out, one member to a line\n"
+        "  card     ask a physical eUICC, or a recording, what it is\n"
         "  version  what this binary is, for a bug report or an editor\n"
         "  completion  a completion script for zsh or bash, to stdout\n"
         "\n"
@@ -718,15 +740,28 @@ usage(void) {
         "  -l          fmt: list the files whose layout differs, and say so in\n"
         "              the exit code -- what a pre-commit hook or CI runs\n"
         "  -s          check: a warning fails the run too\n"
-        "  --json      check, diff: one JSON object, for an editor or a script\n"
+        "  --json      check, diff, card: one JSON object, for an editor or a\n"
+        "              script\n"
         "  --no-rules  check: the reader and the constraints, without the rule set\n"
 
         "  --rules DIR the rule set, default " EUICC_RULES_DIR "\n"
         "  --skel DIR  the ISO Schematron transforms\n"
+        "  --reader NAME  card: the reader to use, default the only one attached\n"
+        "  --replay FILE  card: answer from a recording instead of a reader --\n"
+        "                 what lets info's happy path run with no hardware\n"
+        "                 attached, and what replays a colleague's capture\n"
+        "  --record FILE  card: also write every exchange to FILE, in the\n"
+        "                 format --replay reads back\n"
         "\n"
         "Without -t or -b the input is read as value notation when it is text.\n"
         "diff and fmt -l answer in the exit code: 0 no difference, 1 a\n"
-        "difference, 2 the question could not be answered.\n",
+        "difference, 2 the question could not be answered.\n"
+        "\n"
+        "card info's exit code is a verdict, not merely whether it ran: 0\n"
+        "the card answered and trusts this project's test Certificate\n"
+        "Issuer (its test credentials will work with this card), 1 the card\n"
+        "answered and does not, 2 the question could not be asked at all --\n"
+        "no reader, no card, no ISD-R, or an answer that made no sense.\n",
         stderr);
 }
 
@@ -735,6 +770,13 @@ main(int argc, char **argv) {
     if(argc < 2) { usage(); return 2; }
 
     const char *cmd = argv[1];
+
+    /* card has its own subcommand (info, profiles) and its own flags
+       (--reader, --record, --replay), no overlap with the -t/-b/-o
+       vocabulary the loop below parses for every other command, and no
+       use for libxml2/libxslt either -- so it is dispatched before any
+       of that runs, not folded into the shared loop. */
+    if(!strcmp(cmd, "card")) return cmd_card(argc - 2, argv + 2);
     const char *in = NULL, *out = NULL;
     const char *rules = EUICC_RULES_DIR, *skel = EUICC_SKEL_DIR;
     const char *files[256];

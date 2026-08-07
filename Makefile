@@ -25,6 +25,27 @@ ASN1C   := $(SCHEMA)/asn1c
 RULES   := $(VENDOR)/saip-validator/rules
 DIST    := $(SCHEMA)/dist
 
+# `euicc card` -- the SM-DP+ role of SGP.22, vendored so this binary can ask
+# a real card what it is. Its own dist/ duplicates almost the whole asn1c
+# runtime and the PKIX types the schema's own dist already carries (BER/DER
+# codecs, INTEGER, OCTET_STRING, Certificate, SubjectKeyIdentifier...); see
+# build/librsp-full.a below for how two copies of that coexist in one binary
+# without a link error.
+RSP      := $(VENDOR)/euicc-rsp
+RSP_DIST := $(RSP)/dist
+RSP_LIB  := $(RSP)/librsp.a
+RSP_MBED := $(RSP)/vendor/mbedtls
+RSP_MBED_LIBS := $(RSP_MBED)/library/libmbedcrypto.a $(RSP_MBED)/library/libmbedx509.a
+
+# PC/SC: macOS ships it as a framework, Linux needs pcsc-lite. The same
+# split euicc-rsp's own Makefile makes, repeated here because this binary
+# now links straight to a reader too, not only through librsp.a.
+ifeq ($(shell uname -s),Darwin)
+RSP_PCSC_LIBS := -framework PCSC
+else
+RSP_PCSC_LIBS := $(shell pkg-config --libs libpcsclite 2>/dev/null || echo -lpcsclite)
+endif
+
 # asn1c copies only the skeletons that a schema uses, so a generated directory
 # is missing headers that asn1c-vn includes: RELATIVE-OID.h among them. The
 # skeleton directory of the asn1c source has the complete set, and it is a
@@ -42,7 +63,7 @@ XML_CFLAGS := $(shell xml2-config --cflags 2>/dev/null) \
 XML_LIBS   := $(shell xml2-config --libs 2>/dev/null) \
               $(shell pkg-config --libs libxslt 2>/dev/null || echo -lxslt)
 
-INC := -Isrc -I$(VN)/include -I$(VN)/src -I$(SKELDIR) $(XML_CFLAGS)
+INC := -Isrc -I$(VN)/include -I$(VN)/src -I$(SKELDIR) -I$(RSP)/include $(XML_CFLAGS)
 # The schema source, so `euicc schema` can say where a type is declared. Only
 # a location: the schema itself is read from asn1c's descriptors and never
 # from this file.
@@ -72,7 +93,7 @@ endif
 
 ALL_CFLAGS = $(STD) $(WARN) $(CFLAGS) $(EXTRA) $(INC) $(DEF)
 
-OWN_SRCS := src/main.c src/schematron.c src/diff.c src/schema.c src/format.c
+OWN_SRCS := src/main.c src/schematron.c src/diff.c src/schema.c src/format.c src/card.c
 VN_SRCS  := $(wildcard $(VN)/src/*.c)
 GEN_SRCS  = $(filter-out $(DIST)/converter-example.c, $(wildcard $(DIST)/*.c))
 
@@ -117,18 +138,64 @@ build/gen/.stamp: $(DIST)/ProfileElement.h
 	    -c $(abspath $(GEN_SRCS))
 	@touch $@
 
+# ---- euicc-rsp --------------------------------------------------------------
+# euicc-rsp builds its own library, its own codec (from rsp-2.5.asn) and its
+# own mbedTLS dependency; asked for by name, the same way this Makefile asks
+# euicc-schema's submodule to build the SAIP codec above. Passed the asn1c
+# this Makefile already built, so the generated runtime -- ber_decoder.c,
+# INTEGER.c, OCTET_STRING.c, the PKIX types both projects need -- comes out
+# byte for byte the same as euicc-schema's own dist. That is what makes
+# build/librsp-full.a below possible: two copies of the same code, not two
+# different ones that merely happen to agree.
+$(RSP_LIB): $(ASN1C)/asn1c/asn1c
+	@test -e $(RSP)/vendor/mbedtls/.git || { \
+	    echo "the euicc-rsp submodule's own submodules are missing:" >&2; \
+	    echo "  git -C $(RSP) submodule update --init --recursive" >&2; \
+	    exit 1; }
+	$(MAKE) -C $(RSP) ASN1C="$(abspath $(ASN1C)/asn1c/asn1c)" SKELDIR="$(abspath $(SKELDIR))"
+
+# euicc-rsp's dist/ (rsp-2.5.asn's own types: EUICCInfo2, GetEuiccDataResponse,
+# ProfileInfoListResponse, and the rest) is compiled as a side effect of the
+# rule above, into dist/*.o sitting right next to librsp.a's own members --
+# neither is rebuilt here, both are just gathered.
+#
+# Almost everything in that dist/ duplicates a file euicc-schema's own dist
+# already provides under the same name: the generic asn1c runtime (every
+# schema needs BER/DER, INTEGER, OCTET_STRING, ...) and the PKIX types
+# (Certificate, SubjectKeyIdentifier, ...) that both a profile package and an
+# RSP handshake reference. Two loose .o files defining the same strong symbol
+# is a link error regardless of whether their content agrees -- but a static
+# archive is not: the linker only pulls a member out of one to resolve a
+# symbol still outstanding. build/gen/*.o (euicc-schema's dist, linked as
+# plain .o below, always included) resolves those shared symbols first; the
+# archive built here carries a second copy of every one of them, and the
+# linker simply never has a reason to reach for it. Only the RSP-only members
+# -- the ones nothing else defines -- actually get pulled in.
+build/rsp-objs/.stamp: $(RSP_LIB)
+	rm -rf build/rsp-objs
+	mkdir -p build/rsp-objs
+	cd build/rsp-objs && ar x $(abspath $(RSP_LIB))
+	cp $(RSP_DIST)/*.o build/rsp-objs/
+	@touch $@
+
+build/librsp-full.a: build/rsp-objs/.stamp
+	rm -f $@
+	ar rcs $@ build/rsp-objs/*.o
+
 # ---- the binary ------------------------------------------------------------
 
 # Makefile is a dependency on purpose: VERSION and GITSHA are compiled in, so
 # an edit here has to rebuild -- without this, bumping VERSION produced a
 # binary that still answered with the old one, which is precisely the
 # confusion `euicc version` exists to prevent.
-euicc: $(OWN_SRCS) src/euicc.h build/vn_annotations.c build/gen/.stamp Makefile
+euicc: $(OWN_SRCS) src/euicc.h build/vn_annotations.c build/gen/.stamp \
+       build/librsp-full.a Makefile
 	@test -n "$(XML_LIBS)" || { \
 	    echo "libxml2 and libxslt are needed; install them and try again" >&2; \
 	    exit 1; }
 	$(CC) $(ALL_CFLAGS) -idirafter $(abspath $(DIST)) \
 	    $(OWN_SRCS) $(VN_SRCS) build/vn_annotations.c build/gen/*.o \
+	    build/librsp-full.a $(RSP_MBED_LIBS) $(RSP_PCSC_LIBS) \
 	    -o $@ $(XML_LIBS) -lm
 
 check: euicc
@@ -154,3 +221,4 @@ clean:
 
 distclean: clean
 	$(MAKE) -C $(SCHEMA) distclean 2>/dev/null || true
+	$(MAKE) -C $(RSP) clean 2>/dev/null || true
