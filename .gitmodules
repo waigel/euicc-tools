@@ -6,4 +6,4 @@
 	url = https://github.com/waigel/saip-validator.git
 [submodule "vendor/euicc-lpa"]
 	path = vendor/euicc-lpa
-	url = git@github.com:waigel/euicc-lpa.git
+	url = https://github.com/waigel/euicc-lpa.git
