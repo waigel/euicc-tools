@@ -431,16 +431,16 @@ echo "$out" | grep -q "no-such-reader-euicc-tools-tests" \
   || bad "card info: an unknown reader name is named in the message"
 
 # A recording stands in for a card, so the happy path is testable in CI.
-"$E" card info --replay "$root/vendor/euicc-rsp/testdata/cards/omnikey-info.log" >/dev/null 2>&1 \
+"$E" card info --replay "$root/vendor/euicc-lpa/testdata/cards/omnikey-info.log" >/dev/null 2>&1 \
   && ok "card info reads a recording" || bad "card info reads a recording"
 
-"$E" card info --replay "$root/vendor/euicc-rsp/testdata/cards/omnikey-info.log" --json 2>/dev/null \
+"$E" card info --replay "$root/vendor/euicc-lpa/testdata/cards/omnikey-info.log" --json 2>/dev/null \
   | grep -q '"eid"' && ok "card info --json names the eid" \
                     || bad "card info --json names the eid"
 
 # This project's own test eUICC (the recording above) trusts our test CI:
 # the whole round's own reason for existing is that the exit code says so.
-"$E" card info --replay "$root/vendor/euicc-rsp/testdata/cards/omnikey-info.log" >/dev/null 2>&1
+"$E" card info --replay "$root/vendor/euicc-lpa/testdata/cards/omnikey-info.log" >/dev/null 2>&1
 [ $? -eq 0 ] && ok "card info: our test card trusts our test CI, exit 0" \
              || bad "card info: our test card trusts our test CI, exit 0"
 
@@ -458,14 +458,14 @@ echo "$out" | grep -qi "does not trust" \
 
 # --replay and --reader name two different transports; the command refuses
 # to guess which one is meant rather than silently picking one.
-"$E" card info --replay "$root/vendor/euicc-rsp/testdata/cards/omnikey-info.log" --reader foo >/dev/null 2>&1
+"$E" card info --replay "$root/vendor/euicc-lpa/testdata/cards/omnikey-info.log" --reader foo >/dev/null 2>&1
 [ $? -eq 2 ] && ok "card info: --replay and --reader together is exit 2" \
              || bad "card info: --replay and --reader together is exit 2"
 
 # card profiles: this project's own test eUICC (the recording above) has
 # nothing installed at all -- a real and complete answer, exit 0, not a
 # failure to find anything.
-out=$("$E" card profiles --replay "$root/vendor/euicc-rsp/testdata/cards/omnikey-profiles.log" 2>&1); rc=$?
+out=$("$E" card profiles --replay "$root/vendor/euicc-lpa/testdata/cards/omnikey-profiles.log" 2>&1); rc=$?
 [ $rc -eq 0 ] && ok "card profiles: an empty list is exit 0, not a failure" \
              || bad "card profiles: an empty list is exit 0, not a failure (got $rc)"
 echo "$out" | grep -qi "no profiles" \
@@ -475,7 +475,7 @@ echo "$out" | grep -qi "no profiles" \
 # The populated case, hand-built (testdata/cards/README.md in euicc-rsp
 # explains why: the real card above has nothing to pin actual content
 # against). Two entries; --json names the fields a script would grep for.
-out=$("$E" card profiles --replay "$root/vendor/euicc-rsp/testdata/cards/synthetic-profiles.log" --json 2>/dev/null)
+out=$("$E" card profiles --replay "$root/vendor/euicc-lpa/testdata/cards/synthetic-profiles.log" --json 2>/dev/null)
 rc=$?
 [ $rc -eq 0 ] && ok "card profiles: the populated list is exit 0" \
              || bad "card profiles: the populated list is exit 0 (got $rc)"
@@ -499,7 +499,7 @@ echo "$out" | grep -q '"profileNickname": null' \
 # spaces, so a json_string that escaped nothing at all would pass all of
 # them. This recording carries the characters a JSON string cannot hold
 # raw, and the assertions below pin the escaped forms exactly.
-hostile="$root/vendor/euicc-rsp/testdata/cards/synthetic-profiles-hostile-text.log"
+hostile="$root/vendor/euicc-lpa/testdata/cards/synthetic-profiles-hostile-text.log"
 out=$("$E" card profiles --replay "$hostile" --json 2>/dev/null); rc=$?
 [ $rc -eq 0 ] && ok "card profiles: card-chosen text is exit 0" \
              || bad "card profiles: card-chosen text is exit 0 (got $rc)"
@@ -532,7 +532,7 @@ printf %s\\n "$out" | grep -qF '"profileName": "Grüße 日本"' \
 # so testdata/cards/omnikey-profiles-error.log is a hand-edited copy of
 # the real capture -- see its own header. The eUICC answered and refused:
 # exit 1, not 0 and not 2.
-out=$("$E" card profiles --replay "$root/vendor/euicc-rsp/testdata/cards/omnikey-profiles-error.log" 2>&1); rc=$?
+out=$("$E" card profiles --replay "$root/vendor/euicc-lpa/testdata/cards/omnikey-profiles-error.log" 2>&1); rc=$?
 [ $rc -eq 1 ] && ok "card profiles: a decoded refusal is exit 1, not 0 or 2" \
              || bad "card profiles: a decoded refusal is exit 1, not 0 or 2 (got $rc)"
 echo "$out" | grep -qi "incorrectInputValues" \
@@ -542,7 +542,7 @@ echo "$out" | grep -qi "incorrectInputValues" \
 # --replay and --reader together is exit 2 for profiles too, the same
 # refusal card info gives -- cmd_card's own flag validation runs before
 # either subcommand, so this is one code path, not two to keep in sync.
-"$E" card profiles --replay "$root/vendor/euicc-rsp/testdata/cards/omnikey-profiles.log" --reader foo >/dev/null 2>&1
+"$E" card profiles --replay "$root/vendor/euicc-lpa/testdata/cards/omnikey-profiles.log" --reader foo >/dev/null 2>&1
 [ $? -eq 2 ] && ok "card profiles: --replay and --reader together is exit 2" \
              || bad "card profiles: --replay and --reader together is exit 2"
 

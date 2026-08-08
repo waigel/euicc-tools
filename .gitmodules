@@ -4,6 +4,6 @@
 [submodule "vendor/saip-validator"]
 	path = vendor/saip-validator
 	url = https://github.com/waigel/saip-validator.git
-[submodule "vendor/euicc-rsp"]
-	path = vendor/euicc-rsp
-	url = https://github.com/waigel/euicc-rsp.git
+[submodule "vendor/euicc-lpa"]
+	path = vendor/euicc-lpa
+	url = git@github.com:waigel/euicc-lpa.git

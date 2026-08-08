@@ -25,21 +25,26 @@ ASN1C   := $(SCHEMA)/asn1c
 RULES   := $(VENDOR)/saip-validator/rules
 DIST    := $(SCHEMA)/dist
 
-# `euicc card` -- the SM-DP+ role of SGP.22, vendored so this binary can ask
-# a real card what it is. Its own dist/ duplicates almost the whole asn1c
-# runtime and the PKIX types the schema's own dist already carries (BER/DER
-# codecs, INTEGER, OCTET_STRING, Certificate, SubjectKeyIdentifier...); see
-# build/librsp-full.a below for how two copies of that coexist in one binary
-# without a link error.
-RSP      := $(VENDOR)/euicc-rsp
-RSP_DIST := $(RSP)/dist
+# `euicc card` -- the LPA role of SGP.22, vendored so this binary can ask a
+# real card what it is. euicc-lpa in turn stands on euicc-rsp for crypto,
+# PKI and the generated codec; euicc-rsp's own dist/ duplicates almost the
+# whole asn1c runtime and the PKIX types the schema's own dist already
+# carries (BER/DER codecs, INTEGER, OCTET_STRING, Certificate,
+# SubjectKeyIdentifier...); see build/libeuicc-full.a below for how two
+# copies of that coexist in one binary without a link error.
+LPA      := $(VENDOR)/euicc-lpa
+RSP      := $(LPA)/vendor/euicc-rsp
+LPA_LIB  := $(LPA)/liblpa.a
 RSP_LIB  := $(RSP)/librsp.a
+RSP_DIST := $(RSP)/dist
 RSP_MBED := $(RSP)/vendor/mbedtls
 RSP_MBED_LIBS := $(RSP_MBED)/library/libmbedcrypto.a $(RSP_MBED)/library/libmbedx509.a
 
 # PC/SC: macOS ships it as a framework, Linux needs pcsc-lite. The same
-# split euicc-rsp's own Makefile makes, repeated here because this binary
-# now links straight to a reader too, not only through librsp.a.
+# split euicc-lpa's own Makefile makes, repeated here because this binary
+# now links straight to a reader too, not only through liblpa.a. euicc-rsp
+# no longer builds anything PC/SC -- the card side, and the link flags it
+# needs, moved to euicc-lpa with the rest of it.
 ifeq ($(shell uname -s),Darwin)
 RSP_PCSC_LIBS := -framework PCSC
 else
@@ -63,7 +68,7 @@ XML_CFLAGS := $(shell xml2-config --cflags 2>/dev/null) \
 XML_LIBS   := $(shell xml2-config --libs 2>/dev/null) \
               $(shell pkg-config --libs libxslt 2>/dev/null || echo -lxslt)
 
-INC := -Isrc -Ibuild -I$(VN)/include -I$(VN)/src -I$(SKELDIR) -I$(RSP)/include $(XML_CFLAGS)
+INC := -Isrc -Ibuild -I$(VN)/include -I$(VN)/src -I$(SKELDIR) -I$(LPA)/include -I$(RSP)/include $(XML_CFLAGS)
 # The schema source, so `euicc schema` can say where a type is declared. Only
 # a location: the schema itself is read from asn1c's descriptors and never
 # from this file.
@@ -159,39 +164,41 @@ build/gitsha.h: gitsha-force
 	     echo "$$new" > $@; \
 	 fi
 
-# ---- euicc-rsp --------------------------------------------------------------
-# euicc-rsp builds its own library, its own codec (from rsp-2.5.asn) and its
-# own mbedTLS dependency; asked for by name, the same way this Makefile asks
-# euicc-schema's submodule to build the SAIP codec above. Passed the asn1c
-# this Makefile already built, so the generated runtime -- ber_decoder.c,
-# INTEGER.c, OCTET_STRING.c, the PKIX types both projects need -- comes out
-# byte for byte the same as euicc-schema's own dist (agree except for the
-# known-benign differences the guard below allows). That is what makes
-# build/librsp-full.a below possible: two copies of the same code, not two
-# different ones that merely happen to agree.
+# ---- euicc-lpa --------------------------------------------------------------
+# euicc-lpa builds its own library (the transport, the ES10 command layer,
+# and the read-only card commands), which in turn builds euicc-rsp for its
+# crypto, its PKI and its generated codec (from rsp-2.5.asn) -- asked for by
+# name, the same way this Makefile asks euicc-schema's submodule to build
+# the SAIP codec above. Passed the asn1c this Makefile already built, so
+# the generated runtime -- ber_decoder.c, INTEGER.c, OCTET_STRING.c, the
+# PKIX types both projects need -- comes out byte for byte the same as
+# euicc-schema's own dist (agree except for the known-benign differences the
+# guard below allows). That is what makes build/libeuicc-full.a below
+# possible: two copies of the same code, not two different ones that merely
+# happen to agree.
 #
 # $(RSP_LIB) used to depend only on the asn1c binary, so once it existed
 # nothing here ever asked euicc-rsp to rebuild it again: touching
-# vendor/euicc-rsp/src/rsp_es10.c or vendor/euicc-rsp/include/rsp.h and
+# vendor/euicc-lpa/vendor/euicc-rsp/src/rsp_es10.c or its include/rsp.h and
 # running "make -n euicc" showed nothing to do. The realistic way that
 # bites is a submodule pointer bump -- checkout refreshes the sources,
-# librsp.a keeps its old mtime, and the binary links the previous library.
-# rsp-lib-force makes this recipe run on every build, delegating the actual
-# staleness decision to euicc-rsp's own Makefile, which tracks its sources
-# AND both its headers (include/rsp.h, src/rsp_internal.h) in its %.o rule.
-# `ar` there only touches librsp.a's mtime when a member object actually
-# changed, so a build with nothing to do here stays cheap: the recipe runs,
-# finds nothing stale, and the mtime -- and everything downstream of it --
-# is left alone.
-.PHONY: rsp-lib-force
-rsp-lib-force:
+# liblpa.a keeps its old mtime, and the binary links the previous library.
+# lpa-lib-force makes this recipe run on every build, delegating the actual
+# staleness decision to euicc-lpa's own Makefile (which in turn delegates
+# librsp.a's own staleness to euicc-rsp's), which tracks its sources AND its
+# headers in its %.o rule. `ar` there only touches liblpa.a's mtime when a
+# member object actually changed, so a build with nothing to do here stays
+# cheap: the recipe runs, finds nothing stale, and the mtime -- and
+# everything downstream of it -- is left alone.
+.PHONY: lpa-lib-force
+lpa-lib-force:
 
-$(RSP_LIB): $(ASN1C)/asn1c/asn1c rsp-lib-force
+$(LPA_LIB): $(ASN1C)/asn1c/asn1c lpa-lib-force
 	@test -e $(RSP)/vendor/mbedtls/.git || { \
-	    echo "the euicc-rsp submodule's own submodules are missing:" >&2; \
-	    echo "  git -C $(RSP) submodule update --init --recursive" >&2; \
+	    echo "the euicc-lpa submodule's own submodules are missing:" >&2; \
+	    echo "  git -C $(LPA) submodule update --init --recursive" >&2; \
 	    exit 1; }
-	$(MAKE) -C $(RSP) ASN1C="$(abspath $(ASN1C)/asn1c/asn1c)" SKELDIR="$(abspath $(SKELDIR))"
+	$(MAKE) -C $(LPA) ASN1C="$(abspath $(ASN1C)/asn1c/asn1c)" SKELDIR="$(abspath $(SKELDIR))"
 
 # euicc-rsp's dist/ (rsp-2.5.asn's own types: EUICCInfo2, GetEuiccDataResponse,
 # ProfileInfoListResponse, and the rest) is compiled as a side effect of the
@@ -208,16 +215,25 @@ $(RSP_LIB): $(ASN1C)/asn1c/asn1c rsp-lib-force
 # symbol still outstanding. build/gen/*.o (euicc-schema's dist, linked as
 # plain .o below, always included) resolves those shared symbols first; the
 # archive built here carries a second copy of every one of them, and the
-# linker simply never has a reason to reach for it. Only the RSP-only members
-# -- the ones nothing else defines -- actually get pulled in.
-build/rsp-objs/.stamp: $(RSP_LIB)
+# linker simply never has a reason to reach for it. Only the members nothing
+# else defines -- euicc-rsp's own dist/ types, and everything liblpa.a
+# itself carries -- actually get pulled in.
+#
+# liblpa.a's members are extracted into the same directory, after
+# librsp.a's, so the LPA's own objects (rsp_pcsc.o, rsp_es10.o, ...) sit
+# alongside librsp.a's and go into the one archive below with them. A
+# member name collision between the two archives would silently overwrite
+# one during extraction, but there is none: liblpa.a and librsp.a are built
+# from disjoint source trees.
+build/rsp-objs/.stamp: $(LPA_LIB)
 	rm -rf build/rsp-objs
 	mkdir -p build/rsp-objs
 	cd build/rsp-objs && ar x $(abspath $(RSP_LIB))
+	cd build/rsp-objs && ar x $(abspath $(LPA_LIB))
 	cp $(RSP_DIST)/*.o build/rsp-objs/
 	@touch $@
 
-build/librsp-full.a: build/rsp-objs/.stamp
+build/libeuicc-full.a: build/rsp-objs/.stamp
 	rm -f $@
 	ar rcs $@ build/rsp-objs/*.o
 
@@ -230,13 +246,13 @@ build/librsp-full.a: build/rsp-objs/.stamp
 # through build/gitsha.h instead, since it changes on every commit rather
 # than on a Makefile edit.
 euicc: $(OWN_SRCS) src/euicc.h build/vn_annotations.c build/gen/.stamp \
-       build/librsp-full.a build/gitsha.h Makefile
+       build/libeuicc-full.a build/gitsha.h Makefile
 	@test -n "$(XML_LIBS)" || { \
 	    echo "libxml2 and libxslt are needed; install them and try again" >&2; \
 	    exit 1; }
 	$(CC) $(ALL_CFLAGS) -idirafter $(abspath $(DIST)) \
 	    $(OWN_SRCS) $(VN_SRCS) build/vn_annotations.c build/gen/*.o \
-	    build/librsp-full.a $(RSP_MBED_LIBS) $(RSP_PCSC_LIBS) \
+	    build/libeuicc-full.a $(RSP_MBED_LIBS) $(RSP_PCSC_LIBS) \
 	    -o $@ $(XML_LIBS) -lm
 
 check: euicc
@@ -262,4 +278,5 @@ clean:
 
 distclean: clean
 	$(MAKE) -C $(SCHEMA) distclean 2>/dev/null || true
+	$(MAKE) -C $(LPA) clean 2>/dev/null || true
 	$(MAKE) -C $(RSP) clean 2>/dev/null || true

@@ -3,11 +3,14 @@
  * whether it will work with this project's test credentials.
  *
  * This is the first command in euicc-tools that talks to anything other
- * than a file: it links euicc-rsp (vendor/euicc-rsp), the SM-DP+ role of
+ * than a file: it links euicc-lpa (vendor/euicc-lpa), the LPA role of
  * SGP.22, for its transport layer -- a real reader over PC/SC, or a
  * recording standing in for one -- and for rsp_card_read_info, which
  * drives the actual ES10 exchange (SELECT the ISD-R, GetEUICCInfo2,
- * GetEID) and hands back what the card said.
+ * GetEID) and hands back what the card said. The symbols keep their rsp_
+ * prefix on purpose: it names the Remote SIM Provisioning standard as a
+ * whole, not the SM-DP+ role in particular, and moving the card side to
+ * euicc-lpa did not change what these functions are called.
  *
  * The exit code is the verdict, not just the outcome, and it is a
  * stronger claim than most commands here make:
@@ -25,12 +28,12 @@
  */
 #include "euicc.h"
 
-#include <rsp.h>
+#include <lpa.h>
 
 /*
  * The SubjectKeyIdentifier of euicc-rsp's testdata/sgp26/ci.der -- the
  * published GSMA SGP.26 test Certificate Issuer that this project's
- * DPauth/DPpb credentials (rsp_pki_dp) chain to. rsp.h has no function
+ * DPauth/DPpb credentials (rsp_pki_dp) chain to. lpa.h has no function
  * that extracts a SubjectKeyIdentifier from a certificate; it only has
  * rsp_card_trusts, which answers a question about an identifier the
  * caller already has. So this is a fixed value, not something recomputed
@@ -92,7 +95,7 @@ json_string(const char *s) {
  * person debugging with a colleague's capture reaches for too), --record
  * additionally wraps whichever transport was opened so the session is
  * written down as it happens. rsp_record_open takes ownership of the
- * transport it wraps (include/rsp.h); on its own failure that ownership
+ * transport it wraps (include/lpa.h); on its own failure that ownership
  * was never transferred, so the raw transport is this function's to close.
  *
  * Returns 0 with *out set, or -1 with a message already on stderr.
@@ -203,7 +206,7 @@ cmd_card_info(const char *reader, const char *replay, const char *record,
 
 /*
  * card profiles: the list of profiles already installed on the eUICC,
- * from rsp_card_read_profiles (rsp.h) -- GetProfilesInfo asked with no
+ * from rsp_card_read_profiles (lpa.h) -- GetProfilesInfo asked with no
  * search criteria, "every profile."
  *
  * card info's exit code is a verdict about trust; this one is not, and
@@ -237,7 +240,7 @@ profile_class_name(long v, const char **name) {
 }
 
 /* incorrectInputValues(1) and undefinedError(127) are ProfileInfoListError's
-   only two named values (rsp-2.5.asn, restated in include/rsp.h's own
+   only two named values (rsp-2.5.asn, restated in include/lpa.h's own
    comment on rsp_card_read_profiles); anything else is an extension this
    project's decoder does not name either, so it prints the bare number
    rather than guess at a label. */
