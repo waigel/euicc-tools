@@ -171,9 +171,11 @@ build/gitsha.h: gitsha-force
 # name, the same way this Makefile asks euicc-schema's submodule to build
 # the SAIP codec above. Passed the asn1c this Makefile already built, so
 # the generated runtime -- ber_decoder.c, INTEGER.c, OCTET_STRING.c, the
-# PKIX types both projects need -- comes out byte for byte the same as
-# euicc-schema's own dist (agree except for the known-benign differences the
-# guard below allows). That is what makes build/libeuicc-full.a below
+# PKIX types both projects need -- comes out the same as euicc-schema's own
+# dist. tools/check-codec-agreement (wired in below as the codec-agreement
+# prerequisite) is what actually checks that, file by file, on every build;
+# it names five specific files it lets differ and says why each is safe --
+# see the script itself. That is what makes build/libeuicc-full.a below
 # possible: two copies of the same code, not two different ones that merely
 # happen to agree.
 #
@@ -237,6 +239,18 @@ build/libeuicc-full.a: build/rsp-objs/.stamp
 	rm -f $@
 	ar rcs $@ build/rsp-objs/*.o
 
+# The archive trick above depends on build/gen's copy of the shared runtime
+# and PKIX types agreeing with the copy buried in build/libeuicc-full.a --
+# see the comment where LPA_LIB is defined for why that is expected to hold.
+# tools/check-codec-agreement is what actually checks it, comparing
+# $(DIST) (euicc-schema's dist, the source build/gen/*.o is compiled from)
+# against $(RSP_DIST) file by file. A prerequisite of $(LPA_LIB) rather than
+# of build/rsp-objs/.stamp or build/libeuicc-full.a themselves, so a
+# divergence is reported before anything is archived, not after.
+.PHONY: codec-agreement
+codec-agreement: $(DIST)/ProfileElement.h $(LPA_LIB)
+	@./tools/check-codec-agreement $(DIST) $(RSP_DIST)
+
 # ---- the binary ------------------------------------------------------------
 
 # Makefile is a dependency on purpose: VERSION is compiled in via -D, so an
@@ -246,7 +260,7 @@ build/libeuicc-full.a: build/rsp-objs/.stamp
 # through build/gitsha.h instead, since it changes on every commit rather
 # than on a Makefile edit.
 euicc: $(OWN_SRCS) src/euicc.h build/vn_annotations.c build/gen/.stamp \
-       build/libeuicc-full.a build/gitsha.h Makefile
+       build/libeuicc-full.a build/gitsha.h codec-agreement Makefile
 	@test -n "$(XML_LIBS)" || { \
 	    echo "libxml2 and libxslt are needed; install them and try again" >&2; \
 	    exit 1; }

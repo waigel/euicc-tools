@@ -546,5 +546,14 @@ echo "$out" | grep -qi "incorrectInputValues" \
 [ $? -eq 2 ] && ok "card profiles: --replay and --reader together is exit 2" \
              || bad "card profiles: --replay and --reader together is exit 2"
 
+# The archive trick (see the Makefile) links two copies of the asn1c
+# runtime and the PKIX types, and works only because the copies agree --
+# the linker may take either. Nothing checked that until this assertion;
+# the Makefile comment claimed a guard that did not exist.
+"$root/tools/check-codec-agreement" "$root/vendor/euicc-schema/dist" \
+    "$root/vendor/euicc-lpa/vendor/euicc-rsp/dist" >/dev/null 2>&1 \
+  && ok "the two generated codecs agree on every shared file" \
+  || bad "the two generated codecs agree on every shared file"
+
 printf '\n%d ok, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
