@@ -18,9 +18,13 @@
 # one it built to both submodules) from what is meant to be the same PKIX
 # source, so the code itself is the right bar: a difference there means the
 # two projects' ASN.1 modules have diverged in a shared type, and the
-# binary's behaviour then depends on link order rather than on intent. Five
-# specific, named files are exempt from that bar; is_known_exception() below
-# says which and why. Nothing else is.
+# binary's behaviour then depends on link order rather than on intent.
+#
+# Five files do not match byte for byte. Two of them differ all the way
+# through and are exempt outright (is_known_exception below); the other
+# three differ in one named way each, which normalise() removes so that
+# the rest of those files is still held to the same bar. Nothing else is
+# treated specially.
 set -u
 [ $# -eq 2 ] || { echo "usage: $0 <dir-a> <dir-b>" >&2; exit 2; }
 a=$1; b=$2
@@ -62,44 +66,80 @@ strip_banner() {
     ' "$1"
 }
 
-# Files that are allowed to differ, and why. Each name below was compared by
-# hand against both dist/ directories before being added here; this is not
-# a blanket exemption for a directory or a pattern, it is five specific
-# files, each with a reason that does not generalise to any other file.
+# Two files are exempt outright, and only these two:
 #
 #   converter-example.c, pdu_collection.c -- asn1c writes one of each per
 #     invocation, listing whatever PDUs that particular invocation compiled.
 #     Every asn1c dist/ has a file with these names; their content is the
-#     one place the two schemas are SUPPOSED to differ, not a case of drift.
-#     (euicc-schema's own Makefile already excludes converter-example.c
-#     from GEN_SRCS for the same reason.)
-#
-#   CertificateList.c, CertificateList.h -- rsp-2.5.asn uses CertificateList
-#     as a struct member (SegmentedCrlList, EUICCInfo2); profile-3.4.1.asn
-#     never references it. -pdu=auto sees a different reference graph in
-#     the two invocations and picks a different storage class for the
-#     type's helper array (static in euicc-schema's copy, extern in
-#     euicc-rsp's) -- asn_DEF_CertificateList itself, the only symbol
-#     anything outside the file calls, is identical either way. Harmless
-#     specifically because euicc-schema's copy is the one always linked
-#     (see build/libeuicc-full.a below); euicc-rsp's archived copy of this
-#     file is provably never reached.
-#
-#   UICCCapability.h -- profile-3.4.1.asn and rsp-2.5.asn each define their
-#     own UICCCapability from BIT STRING, independently -- it is not
-#     IMPORTed from a shared module the way Certificate and CertificateList
-#     are, so the two are free to name bits differently, and by SGP.22
-#     version, they do (bit 8, and everything past bit 24). The generated
-#     .c is identical but for the banner: named bits are a compile-time
-#     enum, never a runtime symbol, and vn-annotate reads named bits only
-#     from euicc-schema's own dist (see build/vn_annotations.c), never from
-#     euicc-rsp's, so this file's divergence has no reader anywhere.
+#     one place the two schemas are SUPPOSED to differ, top to bottom, not
+#     a case of drift. There is no part of either file that both copies
+#     should agree on, so there is nothing left to compare after removing
+#     the difference. (euicc-schema's own Makefile already excludes
+#     converter-example.c from GEN_SRCS for the same reason.)
 is_known_exception() {
     case "$1" in
-        converter-example.c|pdu_collection.c|CertificateList.c|CertificateList.h|UICCCapability.h)
+        converter-example.c|pdu_collection.c)
             return 0 ;;
         *)
             return 1 ;;
+    esac
+}
+
+# Three more files differ, but only in one known, named way each -- so
+# instead of exempting them, normalise away exactly that difference and
+# compare everything else.
+#
+# The distinction matters more than it looks. Whole-file exemption stops
+# checking the very property that justified the exemption: the reasoning
+# below turns on asn_DEF_CertificateList being identical in both copies,
+# and a file that is skipped can no longer tell you whether it still is.
+# Appending an invented function to CertificateList.c used to leave this
+# script reporting "all identical". Now it does not.
+#
+#   CertificateList.c -- rsp-2.5.asn uses CertificateList as a struct
+#     member (SegmentedCrlList, EUICCInfo2); profile-3.4.1.asn never
+#     references it. -pdu=auto sees a different reference graph in the two
+#     invocations and picks a different storage class for the type's
+#     helper array: `static asn_MBR_...` and `static asn_SPC_...` in
+#     euicc-schema's copy, the same definitions without `static` in
+#     euicc-rsp's. Drop the keyword on those two definitions and the rest
+#     of the file -- asn_DEF_CertificateList included -- must match.
+#
+#   CertificateList.h -- the same divergence seen from the header side:
+#     euicc-rsp's copy adds `extern` declarations for the two names its .c
+#     no longer makes static. Drop those two lines; everything else must
+#     match.
+#
+#   UICCCapability.h -- profile-3.4.1.asn and rsp-2.5.asn each define
+#     their own UICCCapability from BIT STRING, independently. It is not
+#     IMPORTed from a shared module the way Certificate and
+#     CertificateList are, so the two are free to name bits differently,
+#     and by SGP.22 version they do (bit 8, and everything past bit 24).
+#     Named bits are a compile-time enum, never a runtime symbol, and
+#     euicc-tools' own translation units never see euicc-rsp's copy of
+#     this header (only $(DIST) is on the include path). Drop the enum
+#     body; the struct, the descriptor declaration and everything else in
+#     the file must still match.
+normalise() {
+    case "$1" in
+        CertificateList.c)
+            sed 's/^static \(asn_TYPE_member_t asn_MBR_CertificateList_1\)/\1/;
+                 s/^static \(asn_SEQUENCE_specifics_t asn_SPC_CertificateList_specs_1\)/\1/' ;;
+        CertificateList.h)
+            grep -v '^extern asn_SEQUENCE_specifics_t asn_SPC_CertificateList_specs_1;$' \
+              | grep -v '^extern asn_TYPE_member_t asn_MBR_CertificateList_1\[3\];$' ;;
+        UICCCapability.h)
+            # Everything but the body of the one `typedef enum ... {`
+            # block. The braces of that block are kept, so a file that
+            # lost the enum entirely still differs from one that has it.
+            awk '
+                /^typedef enum UICCCapability \{$/ { print; inenum = 1; next }
+                inenum && /^\} / { inenum = 0 }
+                inenum { next }
+                { print }
+            ' ;;
+        *)
+            cat ;;
     esac
 }
 
@@ -118,8 +158,8 @@ for pa in "$a"/*.c "$a"/*.h; do
 
     is_known_exception "$name" && continue
 
-    strip_banner "$pa" > "$ta"
-    strip_banner "$pb" > "$tb"
+    strip_banner "$pa" | normalise "$name" > "$ta"
+    strip_banner "$pb" | normalise "$name" > "$tb"
     if ! cmp -s "$ta" "$tb"; then
         echo "differs: $name" >&2
         bad=$((bad + 1))
@@ -139,5 +179,5 @@ if [ "$bad" -gt 0 ]; then
     echo "$bad of $shared shared generated files differ" >&2
     exit 1
 fi
-echo "$shared shared generated files, all identical (or a named, documented exception)"
+echo "$shared shared generated files, all identical once the two per-invocation files are set aside"
 exit 0
