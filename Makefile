@@ -227,7 +227,15 @@ $(LPA_LIB): $(ASN1C)/asn1c/asn1c lpa-lib-force
 # member name collision between the two archives would silently overwrite
 # one during extraction, but there is none: liblpa.a and librsp.a are built
 # from disjoint source trees.
-build/rsp-objs/.stamp: $(LPA_LIB)
+# All three sources, not just the first. This recipe extracts from
+# librsp.a and copies euicc-rsp's dist/ as well as unpacking liblpa.a,
+# and it used to depend on liblpa.a alone. So a change confined to
+# euicc-rsp rebuilt librsp.a, left liblpa.a's mtime untouched, and make
+# declared this stamp up to date: the old object stayed in the archive
+# and the binary linked code that had already been overwritten on disk.
+# That cost four separate debugging detours in one session, each one
+# presenting as "my edit had no effect" rather than as a stale build.
+build/rsp-objs/.stamp: $(LPA_LIB) $(RSP_LIB)
 	rm -rf build/rsp-objs
 	mkdir -p build/rsp-objs
 	cd build/rsp-objs && ar x $(abspath $(RSP_LIB))
