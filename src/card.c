@@ -29,6 +29,8 @@
 #include "euicc.h"
 
 #include <lpa.h>
+#include <rsp.h>
+#include "ProfileElement.h"
 
 /*
  * The SubjectKeyIdentifier of euicc-rsp's testdata/sgp26/ci.der -- the
@@ -355,6 +357,186 @@ cmd_card_profiles(const char *reader, const char *replay, const char *record,
     return 0;
 }
 
+
+/*
+ * cmd_card_install -- build a Bound Profile Package for this card and
+ * load it. The whole point of the project, and the first command that
+ * leaves a profile behind.
+ *
+ * The ICCID comes out of the profile's own header PE rather than from a
+ * flag. StoreMetadataRequest (SGP.22 v2.6 section 5.5.3) carries it, and
+ * the eUICC checks it against what the profile actually contains --
+ * CancelSessionReason has metadataMismatch(4) for the disagreement. A
+ * flag would put a twenty-digit number in a person's hands twice and
+ * make a mismatch a plausible typo; reading it from the file makes the
+ * two agree by construction.
+ *
+ * notificationConfigurationInfo is deliberately absent. Section 5.7.18's
+ * note that the eUICC "SHALL generate as many Notifications as
+ * configured in its metadata" is what lets this round leave the whole
+ * notification path out: configure none, none are generated, and nothing
+ * accumulates in a list this tool cannot drain.
+ */
+
+static uint8_t *
+read_file(const char *path, size_t *len) {
+    FILE *f = fopen(path, "rb");
+    if(!f) return NULL;
+    fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
+    if(n <= 0) { fclose(f); return NULL; }
+    uint8_t *p = malloc((size_t)n);
+    if(p && fread(p, 1, (size_t)n, f) != (size_t)n) { free(p); p = NULL; }
+    fclose(f);
+    if(p) *len = (size_t)n;
+    return p;
+}
+
+/* The ICCID out of the profile's first element, which SAIP requires to
+   be the header. Returns 0 with iccid filled, or -1 having said why. */
+static int
+profile_iccid(const uint8_t *upp, size_t upp_len, uint8_t iccid[10]) {
+    ProfileElement_t *pe = NULL;
+    asn_dec_rval_t dr = ber_decode(NULL, &asn_DEF_ProfileElement,
+                                   (void **)&pe, upp, upp_len);
+    if(dr.code != RC_OK || !pe) {
+        if(pe) ASN_STRUCT_FREE(asn_DEF_ProfileElement, pe);
+        fprintf(stderr, "euicc: the profile's first element does not "
+                        "decode\n");
+        return -1;
+    }
+    if(pe->present != ProfileElement_PR_header) {
+        ASN_STRUCT_FREE(asn_DEF_ProfileElement, pe);
+        fprintf(stderr, "euicc: the profile does not start with a header "
+                        "element; SAIP requires it to\n");
+        return -1;
+    }
+    if(pe->choice.header.iccid.size != 10) {
+        ASN_STRUCT_FREE(asn_DEF_ProfileElement, pe);
+        fprintf(stderr, "euicc: the profile's ICCID is not ten bytes\n");
+        return -1;
+    }
+    memcpy(iccid, pe->choice.header.iccid.buf, 10);
+    ASN_STRUCT_FREE(asn_DEF_ProfileElement, pe);
+    return 0;
+}
+
+/* BF25 <len> 5A 0A <iccid> 91 <len> <spn> 92 <len> <name>. Built by hand
+   because all three fields are short-form and there is nothing an
+   encoder could get right that eleven constant-shaped bytes plus two
+   strings get wrong. Returns the length written, or 0 if it would not
+   fit. */
+static size_t
+build_metadata(uint8_t *out, size_t cap, const uint8_t iccid[10],
+               const char *spn, const char *name) {
+    size_t sl = strlen(spn), nl = strlen(name);
+    if(sl > 32 || nl > 64) return 0;             /* the ASN.1 SIZE bounds */
+    size_t content = 12 + 2 + sl + 2 + nl;
+    if(content > 127 || content + 3 > cap) return 0;
+    size_t i = 0;
+    out[i++] = 0xBF; out[i++] = 0x25; out[i++] = (uint8_t)content;
+    out[i++] = 0x5A; out[i++] = 0x0A; memcpy(out + i, iccid, 10); i += 10;
+    out[i++] = 0x91; out[i++] = (uint8_t)sl; memcpy(out + i, spn, sl); i += sl;
+    out[i++] = 0x92; out[i++] = (uint8_t)nl; memcpy(out + i, name, nl); i += nl;
+    return i;
+}
+
+static int
+cmd_card_install(const char *path, const char *spn, const char *name,
+                 const char *reader, const char *replay, const char *record) {
+    if(!path) {
+        fprintf(stderr, "euicc: card install needs a profile package\n");
+        return 2;
+    }
+
+    size_t upp_len = 0;
+    uint8_t *upp = read_file(path, &upp_len);
+    if(!upp) {
+        fprintf(stderr, "euicc: cannot read %s\n", path);
+        return 2;
+    }
+
+    uint8_t iccid[10];
+    if(profile_iccid(upp, upp_len, iccid) != 0) { free(upp); return 2; }
+
+    uint8_t metadata[128];
+    size_t metadata_len = build_metadata(metadata, sizeof metadata, iccid,
+                                          spn ? spn : "euicc-tools",
+                                          name ? name : "test profile");
+    if(metadata_len == 0) {
+        fprintf(stderr, "euicc: the profile name or provider is too long "
+                        "(32 and 64 bytes are the limits)\n");
+        free(upp);
+        return 2;
+    }
+
+    /* Fresh for every run, as SGP.22 requires: section 5.5.1 has the
+       transactionId unique within the SM-DP+'s lifetime, explicitly to
+       stop a CancelSession being replayed, and otSK.DP is a one-time key
+       whose reuse would undo the forward secrecy the exchange exists
+       for. Both are parameters of rsp_lpa_install rather than values it
+       invents, so a test can pin them; here they must not be pinned. */
+    uint8_t transaction_id[16], otsk_dp[32];
+    {
+        FILE *ur = fopen("/dev/urandom", "rb");
+        int got = ur
+            && fread(transaction_id, 1, sizeof transaction_id, ur)
+                 == sizeof transaction_id
+            && fread(otsk_dp, 1, sizeof otsk_dp, ur) == sizeof otsk_dp;
+        if(ur) fclose(ur);
+        if(!got) {
+            fprintf(stderr, "euicc: cannot read /dev/urandom\n");
+            free(upp);
+            return 2;
+        }
+    }
+
+    rsp_transport_t t;
+    if(open_card(reader, replay, record, &t) != 0) { free(upp); return 2; }
+
+    uint8_t *result = NULL;
+    size_t result_len = 0;
+    int step = 0, no_isdr = 0;
+    int rc = rsp_lpa_install(&t, upp, upp_len, metadata, metadata_len,
+                             transaction_id, otsk_dp, &result, &result_len,
+                             &step, &no_isdr);
+    t.close(&t);
+    free(upp);
+
+    if(rc != 0) {
+        static const char *what[] = {
+            "before anything was asked", "asking the eUICC about itself",
+            "asking the eUICC for a challenge", "opening the session",
+            "having the eUICC check our certificate",
+            "having the server check the eUICC's",
+            "asking the eUICC for its one-time key",
+            "building the profile package", "loading the package"
+        };
+        const char *at = (step >= 0 && step <= 8) ? what[step] : "somewhere";
+        if(no_isdr) {
+            fprintf(stderr, "euicc: the card refused to select the ISD-R. "
+                            "It may not be an eUICC, or its ISD-R is "
+                            "locked.\n");
+        } else if(rc == -1) {
+            fprintf(stderr, "euicc: refused at step %d, %s.\n", step, at);
+        } else {
+            fprintf(stderr, "euicc: could not get past step %d, %s.\n",
+                    step, at);
+        }
+        return rc == -1 ? 1 : 2;
+    }
+
+    /* Reaching here means the eUICC took the package and answered. It
+       does NOT mean the profile installed -- that is what the result
+       says, and reporting success without reading it is exactly the
+       mistake this message exists to avoid. */
+    printf("the eUICC accepted the package and returned a "
+           "ProfileInstallationResult of %zu bytes\n", result_len);
+    printf("run `euicc card profiles` to see whether the profile is "
+           "there\n");
+    free(result);
+    return 0;
+}
+
 /*
  * cmd_card_delete -- remove a profile by ICCID.
  *
@@ -433,20 +615,23 @@ int
 cmd_card(int argc, char **argv) {
     if(argc < 1) {
         fprintf(stderr,
-                "euicc: card needs a subcommand: info, profiles or "
-                "delete\n");
+                "euicc: card needs a subcommand: info, profiles, "
+                "install or delete\n");
         return 2;
     }
 
     const char *sub = argv[0];
     const char *reader = NULL, *replay = NULL, *record = NULL;
     const char *arg = NULL;   /* the one positional a subcommand may take */
+    const char *spn = NULL, *name = NULL;
     int as_json = 0;
 
     for(int i = 1; i < argc; i++) {
         if(!strcmp(argv[i], "--reader") && i + 1 < argc) reader = argv[++i];
         else if(!strcmp(argv[i], "--replay") && i + 1 < argc) replay = argv[++i];
         else if(!strcmp(argv[i], "--record") && i + 1 < argc) record = argv[++i];
+        else if(!strcmp(argv[i], "--provider") && i + 1 < argc) spn = argv[++i];
+        else if(!strcmp(argv[i], "--name") && i + 1 < argc) name = argv[++i];
         else if(!strcmp(argv[i], "--json")) as_json = 1;
         else if(argv[i][0] != '-' && !arg) arg = argv[i];
         else {
@@ -466,6 +651,8 @@ cmd_card(int argc, char **argv) {
     if(!strcmp(sub, "info")) return cmd_card_info(reader, replay, record, as_json);
     if(!strcmp(sub, "profiles")) return cmd_card_profiles(reader, replay, record, as_json);
     if(!strcmp(sub, "delete")) return cmd_card_delete(arg, reader, replay, record);
+    if(!strcmp(sub, "install"))
+        return cmd_card_install(arg, spn, name, reader, replay, record);
 
     fprintf(stderr, "euicc: card %s: unknown subcommand\n", sub);
     return 2;
