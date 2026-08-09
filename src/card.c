@@ -355,16 +355,92 @@ cmd_card_profiles(const char *reader, const char *replay, const char *record,
     return 0;
 }
 
+/*
+ * cmd_card_delete -- remove a profile by ICCID.
+ *
+ * This exists so the install path can be practised. Without it every
+ * attempt during development burns a slot on the test card, and a card
+ * with no free slots ends the work.
+ *
+ * The exit code carries the card's own answer rather than flattening
+ * it: SGP.22 v2.6 section 5.7.18 has the eUICC check the profile's
+ * state and its Profile Policy Rules before deleting, and "it is still
+ * enabled" sends a reader somewhere entirely different from "there is
+ * no such profile".
+ */
+static int
+cmd_card_delete(const char *iccid_hex, const char *reader,
+                const char *replay, const char *record) {
+    uint8_t iccid[10];
+
+    if(!iccid_hex) {
+        fprintf(stderr, "euicc: card delete needs an ICCID\n");
+        return 2;
+    }
+    /* Twenty hex digits, nothing else. An ICCID with a stray separator
+       or an odd length would otherwise be padded or truncated into a
+       different profile's identifier. */
+    if(strlen(iccid_hex) != 20) {
+        fprintf(stderr, "euicc: an ICCID is 20 hex digits; got %zu\n",
+                strlen(iccid_hex));
+        return 2;
+    }
+    for(int i = 0; i < 10; i++) {
+        unsigned v;
+        if(sscanf(iccid_hex + 2 * i, "%2x", &v) != 1) {
+            fprintf(stderr, "euicc: %s is not hexadecimal\n", iccid_hex);
+            return 2;
+        }
+        iccid[i] = (uint8_t)v;
+    }
+
+    rsp_transport_t t;
+    if(open_card(reader, replay, record, &t) != 0) return 2;
+
+    long result = 0;
+    int no_isdr = 0;
+    int rc = rsp_card_delete_profile(&t, iccid, &result, &no_isdr);
+    t.close(&t);
+
+    if(rc == 0) {
+        printf("deleted %s\n", iccid_hex);
+        return 0;
+    }
+    if(rc == -1 && no_isdr) {
+        fprintf(stderr, "euicc: the card refused to select the ISD-R. It "
+                        "may not be an eUICC, or its ISD-R is locked.\n");
+        return 2;
+    }
+    if(rc == -1) {
+        const char *why;
+        switch(result) {
+        case 1:  why = "there is no profile with that ICCID"; break;
+        case 2:  why = "the profile is still enabled; it must be disabled "
+                       "first"; break;
+        case 3:  why = "the profile's own policy rules forbid deleting it";
+                 break;
+        default: why = "the eUICC gave no reason"; break;
+        }
+        fprintf(stderr, "euicc: the eUICC refused to delete %s: %s.\n",
+                iccid_hex, why);
+        return 1;
+    }
+    fprintf(stderr, "euicc: the card could not be asked.\n");
+    return 2;
+}
+
 int
 cmd_card(int argc, char **argv) {
     if(argc < 1) {
         fprintf(stderr,
-                "euicc: card needs a subcommand: info or profiles\n");
+                "euicc: card needs a subcommand: info, profiles or "
+                "delete\n");
         return 2;
     }
 
     const char *sub = argv[0];
     const char *reader = NULL, *replay = NULL, *record = NULL;
+    const char *arg = NULL;   /* the one positional a subcommand may take */
     int as_json = 0;
 
     for(int i = 1; i < argc; i++) {
@@ -372,6 +448,7 @@ cmd_card(int argc, char **argv) {
         else if(!strcmp(argv[i], "--replay") && i + 1 < argc) replay = argv[++i];
         else if(!strcmp(argv[i], "--record") && i + 1 < argc) record = argv[++i];
         else if(!strcmp(argv[i], "--json")) as_json = 1;
+        else if(argv[i][0] != '-' && !arg) arg = argv[i];
         else {
             fprintf(stderr, "euicc: card %s: unknown option %s\n", sub,
                     argv[i]);
@@ -388,6 +465,7 @@ cmd_card(int argc, char **argv) {
 
     if(!strcmp(sub, "info")) return cmd_card_info(reader, replay, record, as_json);
     if(!strcmp(sub, "profiles")) return cmd_card_profiles(reader, replay, record, as_json);
+    if(!strcmp(sub, "delete")) return cmd_card_delete(arg, reader, replay, record);
 
     fprintf(stderr, "euicc: card %s: unknown subcommand\n", sub);
     return 2;

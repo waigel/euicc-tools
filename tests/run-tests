@@ -555,5 +555,36 @@ echo "$out" | grep -qi "incorrectInputValues" \
   && ok "the two generated codecs agree on every shared file" \
   || bad "the two generated codecs agree on every shared file"
 
+# card delete: what makes the install path practisable at all. The exit
+# code carries the card's own answer, because SGP.22 5.7.18 gives three
+# distinct refusals and they send a reader to three different places.
+D="$root/vendor/euicc-lpa/testdata/cards"
+out=$("$E" card delete 8944058925001234567F --replay "$D/synthetic-delete-ok.log" 2>&1); rc=$?
+[ $rc -eq 0 ] && ok "card delete: a deleted profile is exit 0" \
+             || bad "card delete: a deleted profile is exit 0 (got $rc)"
+printf %s\\n "$out" | grep -q "deleted 8944058925001234567F" \
+  && ok "card delete: it says which one" \
+  || bad "card delete: it says which one"
+
+# The refusal a real card actually produces for an installed profile.
+out=$("$E" card delete 8944058925001234567F --replay "$D/synthetic-delete-enabled.log" 2>&1); rc=$?
+[ $rc -eq 1 ] && ok "card delete: a refusal is exit 1, not 2" \
+             || bad "card delete: a refusal is exit 1, not 2 (got $rc)"
+printf %s\\n "$out" | grep -q "still enabled" \
+  && ok "card delete: the refusal names the reason, not just the failure" \
+  || bad "card delete: the refusal names the reason, not just the failure"
+
+# An ICCID is exactly twenty hex digits. A short one silently padded or
+# truncated would name a different profile -- caught before any I/O.
+"$E" card delete 8944058925001234567 >/dev/null 2>&1
+[ $? -eq 2 ] && ok "card delete: a 19-digit ICCID is refused" \
+             || bad "card delete: a 19-digit ICCID is refused"
+"$E" card delete 8944058925001234ZZZZ >/dev/null 2>&1
+[ $? -eq 2 ] && ok "card delete: a non-hex ICCID is refused" \
+             || bad "card delete: a non-hex ICCID is refused"
+"$E" card delete >/dev/null 2>&1
+[ $? -eq 2 ] && ok "card delete: a missing ICCID is refused" \
+             || bad "card delete: a missing ICCID is refused"
+
 printf '\n%d ok, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
