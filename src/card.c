@@ -660,10 +660,10 @@ cmd_card_install(const char *path, const char *spn, const char *name,
 
     uint8_t *result = NULL;
     size_t result_len = 0;
-    int step = 0, no_isdr = 0;
+    int step = 0, no_isdr = 0, installed = 0;
     int rc = rsp_lpa_install(&t, upp, upp_len, metadata, metadata_len,
                              transaction_id, otsk_dp, &result, &result_len,
-                             &step, &no_isdr);
+                             &step, &no_isdr, &installed);
     t.close(&t);
     free(upp);
 
@@ -674,9 +674,10 @@ cmd_card_install(const char *path, const char *spn, const char *name,
             "having the eUICC check our certificate",
             "having the server check the eUICC's",
             "asking the eUICC for its one-time key",
-            "building the profile package", "loading the package"
+            "building the profile package", "loading the package",
+            "verifying the eUICC's own report"
         };
-        const char *at = (step >= 0 && step <= 8) ? what[step] : "somewhere";
+        const char *at = (step >= 0 && step <= 9) ? what[step] : "somewhere";
         if(no_isdr) {
             fprintf(stderr, "euicc: the card refused to select the ISD-R. "
                             "It may not be an eUICC, or its ISD-R is "
@@ -690,14 +691,26 @@ cmd_card_install(const char *path, const char *spn, const char *name,
         return rc == -1 ? 1 : 2;
     }
 
-    /* Reaching here means the eUICC took the package and answered. It
-       does NOT mean the profile installed -- that is what the result
-       says, and reporting success without reading it is exactly the
-       mistake this message exists to avoid. */
-    printf("the eUICC accepted the package and returned a "
-           "ProfileInstallationResult of %zu bytes\n", result_len);
-    printf("run `euicc card profiles` to see whether the profile is "
-           "there\n");
+    /* Reaching here means step 9 passed: the eUICC's report is genuinely
+       this card's, for this session, so what it says can be reported as
+       fact. This message used to say only that a package had been
+       accepted and send the reader to `card profiles` to find out the
+       rest -- honest at the time, because nothing here could tell the
+       difference between an installed profile and a signed refusal. Now
+       it can. */
+    if(!installed) {
+        fprintf(stderr, "euicc: the eUICC verifiably refused to install the "
+                        "profile.\n"
+                        "       Its signed ProfileInstallationResult carries "
+                        "an errorResult; `euicc show`\n"
+                        "       the recording of the session (--record) to "
+                        "read which Profile Element\n"
+                        "       it named.\n");
+        free(result);
+        return 1;
+    }
+    printf("installed, and the eUICC's own signed result says so\n");
+    printf("run `euicc card enable` to make it the active profile\n");
     free(result);
     return 0;
 }
