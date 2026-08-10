@@ -455,6 +455,115 @@ build_metadata(uint8_t *out, size_t cap, const uint8_t iccid[10],
     return i;
 }
 
+/*
+ * check_card_can_run -- refuse a profile this card has already said it
+ * cannot run, before a byte of it is sent.
+ *
+ * A profile's header lists eUICC-Mandatory-services: what an eUICC must
+ * have for the profile to work at all. A card lists uiccCapability in its
+ * EUICCInfo2: what it has. That comparison can be made here, and making
+ * it turns a refusal from deep inside an install -- PEStatus
+ * invalid-parameter(6) against a ProfileHeader PE, which carries no
+ * identification to name itself by, after the whole package has been
+ * built, encrypted and sent -- into a sentence naming what is missing.
+ *
+ * The two lists are not one list. rsp-2.5.asn says UICCCapability's
+ * "Sequence is derived from ServicesList[] defined in SIMalliance
+ * PEDefinitions", and it nearly is -- but not by index. RSP orders the
+ * AKA algorithms differently (SAIP milenage/tuak128/cave against RSP
+ * akaMilenage/akaCave/akaTuak128), keeps tuak256 beside them at 7 where
+ * SAIP has it at 16, and reserves rfu1/rfu2 that SAIP has no members for.
+ * So the table below maps by name, one line per service. An index-based
+ * version agrees with itself perfectly and is wrong about every bit from
+ * 5 upward.
+ *
+ * A -1 means SGP.22 v2.5's UICCCapability has no bit for that service:
+ * SAIP has grown members -- usim-test-algorithm, dns-resolution, the
+ * SCP11 pair, everything past suciCalculatorApi -- that a card cannot
+ * answer for, so there is nothing to compare and they are skipped.
+ *
+ * Returns 0 to go ahead, or -1 having explained on stderr.
+ */
+static const struct {
+    size_t      offset;      /* the NULL_t * member inside ServicesList_t */
+    int         bit;         /* UICCCapability bit, or -1 for none */
+    const char *name;
+} service_bits[] = {
+    { offsetof(ServicesList_t, contactless),        0, "contactless" },
+    { offsetof(ServicesList_t, usim),               1, "usim" },
+    { offsetof(ServicesList_t, isim),               2, "isim" },
+    { offsetof(ServicesList_t, csim),               3, "csim" },
+    { offsetof(ServicesList_t, milenage),           4, "milenage" },
+    { offsetof(ServicesList_t, cave),               5, "cave" },
+    { offsetof(ServicesList_t, tuak128),            6, "tuak128" },
+    { offsetof(ServicesList_t, tuak256),            7, "tuak256" },
+    { offsetof(ServicesList_t, gba_usim),          10, "gba-usim" },
+    { offsetof(ServicesList_t, gba_isim),          11, "gba-isim" },
+    { offsetof(ServicesList_t, mbms),              12, "mbms" },
+    { offsetof(ServicesList_t, eap),               13, "eap" },
+    { offsetof(ServicesList_t, javacard),          14, "javacard" },
+    { offsetof(ServicesList_t, multos),            15, "multos" },
+    { offsetof(ServicesList_t, multiple_usim),     16, "multiple-usim" },
+    { offsetof(ServicesList_t, multiple_isim),     17, "multiple-isim" },
+    { offsetof(ServicesList_t, multiple_csim),     18, "multiple-csim" },
+    { offsetof(ServicesList_t, ber_tlv),           19, "ber-tlv" },
+    { offsetof(ServicesList_t, dfLink),            20, "dfLink" },
+    { offsetof(ServicesList_t, cat_tp),            21, "cat-tp" },
+    { offsetof(ServicesList_t, get_identity),      22, "get-identity" },
+    { offsetof(ServicesList_t, profile_a_x25519),  23, "profile-a-x25519" },
+    { offsetof(ServicesList_t, profile_b_p256),    24, "profile-b-p256" },
+    { offsetof(ServicesList_t, suciCalculatorApi), 25, "suciCalculatorApi" },
+};
+
+static int
+check_card_can_run(const uint8_t *upp, size_t upp_len,
+                   const rsp_card_info_t *info) {
+    ProfileElement_t *pe = NULL;
+    asn_dec_rval_t dr = ber_decode(NULL, &asn_DEF_ProfileElement,
+                                   (void **)&pe, upp, upp_len);
+    if(dr.code != RC_OK || !pe || pe->present != ProfileElement_PR_header) {
+        /* profile_iccid already refused anything shaped like this, with
+           its own message, before the card was ever opened. Nothing to
+           add here. */
+        if(pe) ASN_STRUCT_FREE(asn_DEF_ProfileElement, pe);
+        return 0;
+    }
+
+    const ServicesList_t *want = &pe->choice.header.eUICC_Mandatory_services;
+    const char *missing[sizeof service_bits / sizeof service_bits[0]];
+    size_t n_missing = 0;
+
+    for(size_t i = 0; i < sizeof service_bits / sizeof service_bits[0]; i++) {
+        if(service_bits[i].bit < 0) continue;
+        const void *const *member =
+            (const void *const *)((const char *)want + service_bits[i].offset);
+        if(!*member) continue;                    /* the profile does not ask */
+        /* -1 is "this card said nothing about its capabilities", which is
+           not a reason to refuse anything -- see lpa.h on
+           rsp_card_supports. Only a real 0 counts. */
+        if(rsp_card_supports(info, (unsigned)service_bits[i].bit) == 0) {
+            missing[n_missing++] = service_bits[i].name;
+        }
+    }
+
+    ASN_STRUCT_FREE(asn_DEF_ProfileElement, pe);
+
+    if(n_missing == 0) return 0;
+
+    fprintf(stderr, "euicc: this profile requires %s the card does not have:",
+            n_missing == 1 ? "a capability" : "capabilities");
+    for(size_t i = 0; i < n_missing; i++) {
+        fprintf(stderr, "%s %s", i ? "," : "", missing[i]);
+    }
+    fprintf(stderr, "\n       The profile header lists them in "
+                    "eUICC-Mandatory-services; the card does not claim them\n"
+                    "       in uiccCapability (see euicc card info). Loading "
+                    "it would be refused\n"
+                    "       by the eUICC after the whole package had been "
+                    "sent.\n");
+    return -1;
+}
+
 static int
 cmd_card_install(const char *path, const char *spn, const char *name,
                  int profile_class,
@@ -528,6 +637,26 @@ cmd_card_install(const char *path, const char *spn, const char *name,
 
     rsp_transport_t t;
     if(open_card(reader, replay, record, &t) != 0) { free(upp); return 2; }
+
+    /* Ask the card what it can do before sending it something it cannot
+       run. A failure to read that is not itself a reason to stop: the
+       install below asks the card the same first questions and reports
+       its own failure properly, and turning "could not read the card's
+       capabilities" into a refusal here would invent a way to fail that
+       the install does not otherwise have. */
+    {
+        rsp_card_info_t info;
+        memset(&info, 0, sizeof info);
+        if(rsp_card_read_info(&t, &info, NULL) == 0) {
+            int capable = check_card_can_run(upp, upp_len, &info);
+            rsp_card_info_free(&info);
+            if(capable != 0) {
+                t.close(&t);
+                free(upp);
+                return 1;
+            }
+        }
+    }
 
     uint8_t *result = NULL;
     size_t result_len = 0;

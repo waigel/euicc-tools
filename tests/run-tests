@@ -586,5 +586,47 @@ printf %s\\n "$out" | grep -q "still enabled" \
 [ $? -eq 2 ] && ok "card delete: a missing ICCID is refused" \
              || bad "card delete: a missing ICCID is refused"
 
+# card install: a profile whose header demands a capability the card does
+# not claim is refused before any of it is sent. omnikey-info.log is the
+# real test eUICC's own answer -- uiccCapability '067F36C0'H, eighteen
+# declared bits, so nothing from berTlvFileSupport(19) upward. The install
+# stops immediately after reading that, which is why an info recording is
+# a complete enough transport for this path.
+#
+# get-identity is the concrete case: GSMA TS.48 v7.0's Generic Test
+# Profile lists it as mandatory and this card cannot run it. Before the
+# check existed, the eUICC refused only after the whole Bound Profile
+# Package had been built, encrypted and sent -- PEStatus
+# invalid-parameter(6) against a ProfileHeader PE, which carries no
+# identification to name itself by.
+cat > "$tmp/needs-get-identity.vn" <<'VN'
+value1 ProfileElement ::= header : {
+    major-version 2,
+    minor-version 3,
+    profileType "capability check",
+    iccid '89000123456789012341'H,
+    eUICC-Mandatory-services { usim NULL, get-identity NULL },
+    eUICC-Mandatory-GFSTEList { { 2 23 143 1 2 1 } }
+}
+value2 ProfileElement ::= end : { end-header { identification 2 } }
+VN
+"$E" build "$tmp/needs-get-identity.vn" -o "$tmp/needs-get-identity.der" >/dev/null 2>&1 \
+  && ok "card install: the capability-check fixture builds" \
+  || bad "card install: the capability-check fixture builds"
+
+out=$("$E" card install "$tmp/needs-get-identity.der" \
+        --replay "$root/vendor/euicc-lpa/testdata/cards/omnikey-info.log" 2>&1); rc=$?
+[ $rc -eq 1 ] && ok "card install: a profile the card cannot run is exit 1, not 2" \
+             || bad "card install: a profile the card cannot run is exit 1, not 2 (got $rc)"
+printf %s\\n "$out" | grep -q "get-identity" \
+  && ok "card install: the refusal names the missing capability" \
+  || bad "card install: the refusal names the missing capability"
+# usim is asked for too, and this card has it: naming it would turn the
+# message into a list of everything the profile wants rather than of what
+# is actually wrong.
+printf %s\\n "$out" | grep -q "usim" \
+  && bad "card install: it names only what is missing, not every service asked for" \
+  || ok "card install: it names only what is missing, not every service asked for"
+
 printf '\n%d ok, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
