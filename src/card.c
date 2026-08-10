@@ -715,18 +715,18 @@ cmd_card_install(const char *path, const char *spn, const char *name,
  * enabled" sends a reader somewhere entirely different from "there is
  * no such profile".
  */
+/* Twenty hex digits into ten bytes, nothing else accepted. An ICCID with
+   a stray separator or an odd length would otherwise be padded or
+   truncated into a different profile's identifier -- which for delete and
+   enable alike means acting on the wrong profile, so it is caught before
+   any I/O. Returns 0, or 2 having said why (the caller's own exit code
+   for "the question could not be asked"). */
 static int
-cmd_card_delete(const char *iccid_hex, const char *reader,
-                const char *replay, const char *record) {
-    uint8_t iccid[10];
-
+parse_iccid(const char *sub, const char *iccid_hex, uint8_t out[10]) {
     if(!iccid_hex) {
-        fprintf(stderr, "euicc: card delete needs an ICCID\n");
+        fprintf(stderr, "euicc: card %s needs an ICCID\n", sub);
         return 2;
     }
-    /* Twenty hex digits, nothing else. An ICCID with a stray separator
-       or an odd length would otherwise be padded or truncated into a
-       different profile's identifier. */
     if(strlen(iccid_hex) != 20) {
         fprintf(stderr, "euicc: an ICCID is 20 hex digits; got %zu\n",
                 strlen(iccid_hex));
@@ -738,8 +738,17 @@ cmd_card_delete(const char *iccid_hex, const char *reader,
             fprintf(stderr, "euicc: %s is not hexadecimal\n", iccid_hex);
             return 2;
         }
-        iccid[i] = (uint8_t)v;
+        out[i] = (uint8_t)v;
     }
+    return 0;
+}
+
+static int
+cmd_card_delete(const char *iccid_hex, const char *reader,
+                const char *replay, const char *record) {
+    uint8_t iccid[10];
+    int bad = parse_iccid("delete", iccid_hex, iccid);
+    if(bad) return bad;
 
     rsp_transport_t t;
     if(open_card(reader, replay, record, &t) != 0) return 2;
@@ -776,12 +785,119 @@ cmd_card_delete(const char *iccid_hex, const char *reader,
     return 2;
 }
 
+/*
+ * cmd_card_enable -- make an installed profile the enabled one.
+ *
+ * The step that turns "the eUICC accepted the package" into a profile
+ * that is actually in use. A freshly installed profile is disabled, and
+ * nothing about a successful install says the card can run what it
+ * stored -- enabling is where that gets tested.
+ *
+ * No --refresh flag, deliberately: rsp_card_enable_profile always sends
+ * refreshFlag false, because a REFRESH is a card reset that a Device's
+ * modem carries out and this program has neither (see lpa.h). Offering a
+ * flag for it would offer a way to break the exchange it is sent over.
+ */
+static int
+cmd_card_enable(const char *iccid_hex, const char *reader,
+                const char *replay, const char *record) {
+    uint8_t iccid[10];
+    int bad = parse_iccid("enable", iccid_hex, iccid);
+    if(bad) return bad;
+
+    rsp_transport_t t;
+    if(open_card(reader, replay, record, &t) != 0) return 2;
+
+    long result = 0;
+    int no_isdr = 0;
+    int rc = rsp_card_enable_profile(&t, iccid, &result, &no_isdr);
+    t.close(&t);
+
+    if(rc == 0) {
+        printf("enabled %s\n", iccid_hex);
+        return 0;
+    }
+    if(rc == -1 && no_isdr) {
+        fprintf(stderr, "euicc: the card refused to select the ISD-R. It "
+                        "may not be an eUICC, or its ISD-R is locked.\n");
+        return 2;
+    }
+    if(rc == -1) {
+        /* Each of these is a distinct next step, which is why they are
+           spelled out rather than reported as a number: see SGP.22 v2.6
+           section 5.7.16 for what the eUICC checks before switching. */
+        const char *why;
+        switch(result) {
+        case 1: why = "there is no profile with that ICCID"; break;
+        case 2: why = "the profile is not in the disabled state"; break;
+        case 3: why = "the enabled profile's own policy rules forbid "
+                      "disabling it"; break;
+        case 4: why = "a Test Profile is enabled, and this is neither "
+                      "another Test Profile nor the Operational Profile "
+                      "that was enabled before it"; break;
+        case 5: why = "the eUICC is busy with a proactive session"; break;
+        default: why = "the eUICC gave no reason"; break;
+        }
+        fprintf(stderr, "euicc: the eUICC refused to enable %s: %s.\n",
+                iccid_hex, why);
+        return 1;
+    }
+    fprintf(stderr, "euicc: the card could not be asked.\n");
+    return 2;
+}
+
+/* cmd_card_disable -- the mirror of enable, and what makes it reversible:
+   an enabled profile cannot be deleted (SGP.22 v2.6 section 5.7.18 has the
+   eUICC refuse), so without this a card that has been enabled once cannot
+   be emptied again. */
+static int
+cmd_card_disable(const char *iccid_hex, const char *reader,
+                 const char *replay, const char *record) {
+    uint8_t iccid[10];
+    int bad = parse_iccid("disable", iccid_hex, iccid);
+    if(bad) return bad;
+
+    rsp_transport_t t;
+    if(open_card(reader, replay, record, &t) != 0) return 2;
+
+    long result = 0;
+    int no_isdr = 0;
+    int rc = rsp_card_disable_profile(&t, iccid, &result, &no_isdr);
+    t.close(&t);
+
+    if(rc == 0) {
+        printf("disabled %s\n", iccid_hex);
+        return 0;
+    }
+    if(rc == -1 && no_isdr) {
+        fprintf(stderr, "euicc: the card refused to select the ISD-R. It "
+                        "may not be an eUICC, or its ISD-R is locked.\n");
+        return 2;
+    }
+    if(rc == -1) {
+        const char *why;
+        switch(result) {
+        case 1: why = "there is no profile with that ICCID"; break;
+        case 2: why = "the profile is not in the enabled state"; break;
+        case 3: why = "the profile's own policy rules forbid disabling it";
+                break;
+        case 5: why = "the eUICC is busy with a proactive session"; break;
+        default: why = "the eUICC gave no reason"; break;
+        }
+        fprintf(stderr, "euicc: the eUICC refused to disable %s: %s.\n",
+                iccid_hex, why);
+        return 1;
+    }
+    fprintf(stderr, "euicc: the card could not be asked.\n");
+    return 2;
+}
+
 int
 cmd_card(int argc, char **argv) {
     if(argc < 1) {
         fprintf(stderr,
                 "euicc: card needs a subcommand: info, profiles, "
-                "install or delete\n");
+                "install, enable, disable or delete\n");
         return 2;
     }
 
@@ -833,6 +949,8 @@ cmd_card(int argc, char **argv) {
     if(!strcmp(sub, "info")) return cmd_card_info(reader, replay, record, as_json);
     if(!strcmp(sub, "profiles")) return cmd_card_profiles(reader, replay, record, as_json);
     if(!strcmp(sub, "delete")) return cmd_card_delete(arg, reader, replay, record);
+    if(!strcmp(sub, "enable")) return cmd_card_enable(arg, reader, replay, record);
+    if(!strcmp(sub, "disable")) return cmd_card_disable(arg, reader, replay, record);
     if(!strcmp(sub, "install"))
         return cmd_card_install(arg, spn, name, profile_class,
                                 reader, replay, record);

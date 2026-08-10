@@ -586,6 +586,35 @@ printf %s\\n "$out" | grep -q "still enabled" \
 [ $? -eq 2 ] && ok "card delete: a missing ICCID is refused" \
              || bad "card delete: a missing ICCID is refused"
 
+# card enable: the step that turns an installed profile into one in use.
+# omnikey-enable.log is the real session that enabled this project's TS.48
+# test profile, so the exit code here rests on a card's own answer.
+out=$("$E" card enable 98001032547698103214 --replay "$D/omnikey-enable.log" 2>&1); rc=$?
+[ $rc -eq 0 ] && ok "card enable: the real card's enable is exit 0" \
+             || bad "card enable: the real card's enable is exit 0 (got $rc)"
+printf %s\\n "$out" | grep -q "enabled 98001032547698103214" \
+  && ok "card enable: it says which one" \
+  || bad "card enable: it says which one"
+
+# card disable: what makes enable reversible. An enabled profile cannot be
+# deleted, so without this the card stays as it was left.
+out=$("$E" card disable 98001032547698103214 --replay "$D/omnikey-disable.log" 2>&1); rc=$?
+[ $rc -eq 0 ] && ok "card disable: the real card's disable is exit 0" \
+             || bad "card disable: the real card's disable is exit 0 (got $rc)"
+printf %s\\n "$out" | grep -q "disabled 98001032547698103214" \
+  && ok "card disable: it says which one" \
+  || bad "card disable: it says which one"
+
+# The same ICCID checks delete gets, now that both go through parse_iccid:
+# a wrong-length or non-hex ICCID names a different profile, so it is
+# refused before any I/O.
+"$E" card enable 8944058925001234567 >/dev/null 2>&1
+[ $? -eq 2 ] && ok "card enable: a 19-digit ICCID is refused" \
+             || bad "card enable: a 19-digit ICCID is refused"
+"$E" card enable >/dev/null 2>&1
+[ $? -eq 2 ] && ok "card enable: a missing ICCID is refused" \
+             || bad "card enable: a missing ICCID is refused"
+
 # card install: a profile whose header demands a capability the card does
 # not claim is refused before any of it is sent. omnikey-info.log is the
 # real test eUICC's own answer -- uiccCapability '067F36C0'H, eighteen
