@@ -474,8 +474,27 @@ cmd_card_install(const char *path, const char *spn, const char *name,
     uint8_t iccid[10];
     if(profile_iccid(upp, upp_len, iccid) != 0) { free(upp); return 2; }
 
+    /* The two sides of this boundary spell an ICCID differently, and the
+       eUICC checks one against the other. SAIP's ProfileHeader carries the
+       digits in reading order; RSP's Iccid is "ICCID as coded in EFiccid"
+       (rsp-2.5.asn's own comment on the type), which is 3GPP's nibble-
+       swapped BCD -- the same bytes EFiccid inside the profile holds.
+       SGP.22 v2.6 section 5.5.5 is explicit that the eUICC "SHALL ignore
+       the ICCID value provided in the 'ProfileHeader' PE" and instead
+       requires "The ICCID provided in the Profile Metadata is identical
+       to the value of EFICCID". Handing the header's bytes straight to
+       StoreMetadata therefore compares an unswapped value against a
+       swapped one, and a real eUICC refuses the finished install with
+       installFailedDueToDataMismatch(13) -- after every Profile Element
+       has already been processed successfully, which is what makes it
+       read like a profile fault rather than a metadata one. */
+    uint8_t iccid_ef[10];
+    for(size_t k = 0; k < sizeof iccid; k++) {
+        iccid_ef[k] = (uint8_t)((iccid[k] >> 4) | (iccid[k] << 4));
+    }
+
     uint8_t metadata[128];
-    size_t metadata_len = build_metadata(metadata, sizeof metadata, iccid,
+    size_t metadata_len = build_metadata(metadata, sizeof metadata, iccid_ef,
                                           spn ? spn : "euicc-tools",
                                           name ? name : "test profile",
                                           profile_class);
