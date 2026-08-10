@@ -420,28 +420,44 @@ profile_iccid(const uint8_t *upp, size_t upp_len, uint8_t iccid[10]) {
     return 0;
 }
 
-/* BF25 <len> 5A 0A <iccid> 91 <len> <spn> 92 <len> <name>. Built by hand
-   because all three fields are short-form and there is nothing an
-   encoder could get right that eleven constant-shaped bytes plus two
-   strings get wrong. Returns the length written, or 0 if it would not
-   fit. */
+/* BF25 <len> 5A 0A <iccid> 91 <len> <spn> 92 <len> <name> [95 01 <class>].
+   Built by hand because all these fields are short-form and there is
+   nothing an encoder could get right that eleven constant-shaped bytes
+   plus two strings get wrong. Returns the length written, or 0 if it
+   would not fit.
+
+   profile_class is a ProfileClass value, or -1 to leave the field out.
+   Leaving it out is not the same as saying "operational": the field
+   carries DEFAULT operational, so DER omits it for that value and an
+   eUICC reads an absent field as operational either way. It has to be
+   present for a Test Profile, though, and that is not cosmetic -- SGP.22
+   v2.6 section 2.4.5.3: "A Test Profile SHALL have its Profile Class set
+   to 'test' in its Profile Metadata", because a Test Profile is allowed
+   network authentication keys an Operational Profile is not. A test
+   profile installed with the class left at operational is a profile
+   whose metadata and content disagree, and a real eUICC refuses it with
+   installFailedDueToDataMismatch(13). */
 static size_t
 build_metadata(uint8_t *out, size_t cap, const uint8_t iccid[10],
-               const char *spn, const char *name) {
+               const char *spn, const char *name, int profile_class) {
     size_t sl = strlen(spn), nl = strlen(name);
     if(sl > 32 || nl > 64) return 0;             /* the ASN.1 SIZE bounds */
-    size_t content = 12 + 2 + sl + 2 + nl;
+    size_t content = 12 + 2 + sl + 2 + nl + (profile_class >= 0 ? 3 : 0);
     if(content > 127 || content + 3 > cap) return 0;
     size_t i = 0;
     out[i++] = 0xBF; out[i++] = 0x25; out[i++] = (uint8_t)content;
     out[i++] = 0x5A; out[i++] = 0x0A; memcpy(out + i, iccid, 10); i += 10;
     out[i++] = 0x91; out[i++] = (uint8_t)sl; memcpy(out + i, spn, sl); i += sl;
     out[i++] = 0x92; out[i++] = (uint8_t)nl; memcpy(out + i, name, nl); i += nl;
+    if(profile_class >= 0) {
+        out[i++] = 0x95; out[i++] = 0x01; out[i++] = (uint8_t)profile_class;
+    }
     return i;
 }
 
 static int
 cmd_card_install(const char *path, const char *spn, const char *name,
+                 int profile_class,
                  const char *reader, const char *replay, const char *record) {
     if(!path) {
         fprintf(stderr, "euicc: card install needs a profile package\n");
@@ -461,7 +477,8 @@ cmd_card_install(const char *path, const char *spn, const char *name,
     uint8_t metadata[128];
     size_t metadata_len = build_metadata(metadata, sizeof metadata, iccid,
                                           spn ? spn : "euicc-tools",
-                                          name ? name : "test profile");
+                                          name ? name : "test profile",
+                                          profile_class);
     if(metadata_len == 0) {
         fprintf(stderr, "euicc: the profile name or provider is too long "
                         "(32 and 64 bytes are the limits)\n");
@@ -625,6 +642,11 @@ cmd_card(int argc, char **argv) {
     const char *arg = NULL;   /* the one positional a subcommand may take */
     const char *spn = NULL, *name = NULL;
     int as_json = 0;
+    /* -1 means "leave the field out", which an eUICC reads as operational
+       -- see build_metadata. Named rather than numeric on the command
+       line: the numbers are ProfileClass's, and a person installing a
+       test profile should not have to know that test is 0. */
+    int profile_class = -1;
 
     for(int i = 1; i < argc; i++) {
         if(!strcmp(argv[i], "--reader") && i + 1 < argc) reader = argv[++i];
@@ -632,6 +654,18 @@ cmd_card(int argc, char **argv) {
         else if(!strcmp(argv[i], "--record") && i + 1 < argc) record = argv[++i];
         else if(!strcmp(argv[i], "--provider") && i + 1 < argc) spn = argv[++i];
         else if(!strcmp(argv[i], "--name") && i + 1 < argc) name = argv[++i];
+        else if(!strcmp(argv[i], "--class") && i + 1 < argc) {
+            const char *c = argv[++i];
+            if(!strcmp(c, "test")) profile_class = 0;
+            else if(!strcmp(c, "provisioning")) profile_class = 1;
+            else if(!strcmp(c, "operational")) profile_class = 2;
+            else {
+                fprintf(stderr, "euicc: card %s: --class takes test, "
+                                "provisioning or operational, not %s\n",
+                        sub, c);
+                return 2;
+            }
+        }
         else if(!strcmp(argv[i], "--json")) as_json = 1;
         else if(argv[i][0] != '-' && !arg) arg = argv[i];
         else {
@@ -652,7 +686,8 @@ cmd_card(int argc, char **argv) {
     if(!strcmp(sub, "profiles")) return cmd_card_profiles(reader, replay, record, as_json);
     if(!strcmp(sub, "delete")) return cmd_card_delete(arg, reader, replay, record);
     if(!strcmp(sub, "install"))
-        return cmd_card_install(arg, spn, name, reader, replay, record);
+        return cmd_card_install(arg, spn, name, profile_class,
+                                reader, replay, record);
 
     fprintf(stderr, "euicc: card %s: unknown subcommand\n", sub);
     return 2;
