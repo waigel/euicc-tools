@@ -281,6 +281,16 @@ out:
     return ret;
 }
 
+/* -2 covers every "never reached", and on its own it says nothing about
+   which of half a dozen steps did not happen. Each one names itself
+   here, because the difference between a missing field and a repack
+   that refused is the difference between a server bug and a client bug. */
+static void note(es9_client_t *c, const char *what)
+{
+    free(c->last_error);
+    c->last_error = strdup(what);
+}
+
 /* Did the server say it executed the function? Returns 0 on success,
    -1 on a Failed/Expired status, -2 when the answer has no status at
    all. On -1 the server's own message, if any, lands in last_error. */
@@ -289,7 +299,10 @@ static int check_status(es9_client_t *c, const char *resp)
     char *status = NULL, *msg = NULL;
     int ret;
 
-    if (es9_json_string(resp, "status", &status) != 0) return -2;
+    if (es9_json_string(resp, "status", &status) != 0) {
+        note(c, "the answer carries no functionExecutionStatus");
+        return -2;
+    }
     if (strcmp(status, "Executed-Success") == 0 ||
         strcmp(status, "Executed-WithWarning") == 0) {
         ret = 0;
@@ -393,11 +406,25 @@ int es9_initiate_authentication(es9_client_t *c,
     if (ret != 0) goto out;
     ret = -2;
 
-    if (es9_json_string(resp, "transactionId", transaction_id_hex) != 0) goto out;
+    if (es9_json_string(resp, "transactionId", transaction_id_hex) != 0) {
+        note(c, "the answer has no transactionId");
+        goto out;
+    }
     for (i = 0; i < 4; i++) {
         char *v = NULL;
-        if (es9_json_string(resp, KEYS[i], &v) != 0) goto out;
-        if (es9_b64_decode(v, &f[i], &l[i]) != 0) { free(v); goto out; }
+        if (es9_json_string(resp, KEYS[i], &v) != 0) {
+            char msg[128];
+            snprintf(msg, sizeof msg, "the answer has no %s", KEYS[i]);
+            note(c, msg);
+            goto out;
+        }
+        if (es9_b64_decode(v, &f[i], &l[i]) != 0) {
+            char msg[128];
+            snprintf(msg, sizeof msg, "%s is not base64", KEYS[i]);
+            note(c, msg);
+            free(v);
+            goto out;
+        }
         free(v);
     }
 
@@ -414,7 +441,10 @@ int es9_initiate_authentication(es9_client_t *c,
         static const uint8_t T0[1] = { 0x80 };
         static const uint8_t SEQ[1] = { 0x30 };
 
-        if (es9_hex_decode(*transaction_id_hex, &tid, &tid_len) != 0) goto out;
+        if (es9_hex_decode(*transaction_id_hex, &tid, &tid_len) != 0) {
+            note(c, "the transactionId is not hexadecimal");
+            goto out;
+        }
         if (wrap(T0, 1, &tid, &tid_len, 1, &tidtlv, &tidtlv_len) != 0) {
             free(tid);
             goto out;
@@ -430,6 +460,10 @@ int es9_initiate_authentication(es9_client_t *c,
     }
 
     ret = rsp_lpa_repack_authenticate_server(ok, ok_len, auth_server_req, req_len);
+    if (ret != 0) {
+        note(c, "the fields did not reassemble into an "
+                "InitiateAuthenticationOkEs9 the repacker accepts");
+    }
 
 out:
     free(chal);
@@ -470,8 +504,19 @@ int es9_authenticate_client(es9_client_t *c, const char *transaction_id_hex,
 
     for (i = 0; i < 4; i++) {
         char *v = NULL;
-        if (es9_json_string(resp, KEYS[i], &v) != 0) goto out;
-        if (es9_b64_decode(v, &f[i], &l[i]) != 0) { free(v); goto out; }
+        if (es9_json_string(resp, KEYS[i], &v) != 0) {
+            char msg[128];
+            snprintf(msg, sizeof msg, "the answer has no %s", KEYS[i]);
+            note(c, msg);
+            goto out;
+        }
+        if (es9_b64_decode(v, &f[i], &l[i]) != 0) {
+            char msg[128];
+            snprintf(msg, sizeof msg, "%s is not base64", KEYS[i]);
+            note(c, msg);
+            free(v);
+            goto out;
+        }
         free(v);
     }
 
@@ -487,7 +532,10 @@ int es9_authenticate_client(es9_client_t *c, const char *transaction_id_hex,
         static const uint8_t SEQ[1] = { 0x30 };
         static const uint8_t BF3B[2] = { 0xbf, 0x3b };
 
-        if (es9_hex_decode(transaction_id_hex, &tid, &tid_len) != 0) goto out;
+        if (es9_hex_decode(transaction_id_hex, &tid, &tid_len) != 0) {
+            note(c, "the transactionId is not hexadecimal");
+            goto out;
+        }
         if (wrap(T0, 1, &tid, &tid_len, 1, &tidtlv, &tidtlv_len) != 0) {
             free(tid);
             goto out;
@@ -505,6 +553,10 @@ int es9_authenticate_client(es9_client_t *c, const char *transaction_id_hex,
 
     ret = rsp_lpa_repack_prepare_download(choice, choice_len,
                                           prepare_download_req, req_len);
+    if (ret != 0) {
+        note(c, "the fields did not reassemble into an "
+                "AuthenticateClientResponseEs9 the repacker accepts");
+    }
 
 out:
     free(asr);
@@ -537,8 +589,14 @@ int es9_get_bound_profile_package(es9_client_t *c, const char *transaction_id_he
     if (ret != 0) goto out;
     ret = -2;
 
-    if (es9_json_string(resp, "boundProfilePackage", &v) != 0) goto out;
-    if (es9_b64_decode(v, bpp, bpp_len) != 0) goto out;
+    if (es9_json_string(resp, "boundProfilePackage", &v) != 0) {
+        note(c, "the answer has no boundProfilePackage");
+        goto out;
+    }
+    if (es9_b64_decode(v, bpp, bpp_len) != 0) {
+        note(c, "boundProfilePackage is not base64");
+        goto out;
+    }
     ret = 0;
 
 out:
