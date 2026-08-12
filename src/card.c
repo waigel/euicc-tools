@@ -1151,6 +1151,23 @@ cmd_metadata(const char *path, const char *out_path, const char *spn,
         fprintf(stderr, "%02x", iccid_ef[k]);
     }
     fprintf(stderr, "\n");
+
+    /* profileClass is OPTIONAL, and leaving it out is not neutral: an
+       eUICC reads its absence as operational. SGP.22 v2.6 section
+       2.4.5.3 requires a Test Profile to say that it is one, and every
+       Profile this project installs is a test Profile -- it can only
+       reach a card that trusts the SGP.26 test credentials. So silence
+       here produces a Profile that lies about itself, and the card
+       reports it as operational afterwards with nothing to explain why.
+       Not defaulted to test, because that would be this command
+       deciding what a Profile is; said out loud instead. */
+    if(profile_class < 0) {
+        fprintf(stderr,
+                "euicc: note: no --class given, so profileClass is absent "
+                "and an eUICC will read this profile as operational.\n"
+                "euicc: a Test Profile has to declare itself "
+                "(SGP.22 section 2.4.5.3) -- pass --class test.\n");
+    }
     return 0;
 }
 
