@@ -575,6 +575,38 @@ profile_iccid(const uint8_t *upp, size_t upp_len, uint8_t iccid[10]) {
     return 0;
 }
 
+/* Does the Profile say it needs the USIM test algorithm?
+ *
+ * SAIP's ProfileHeader lists eUICC-Mandatory-services, and
+ * usim-test-algorithm is one of them -- a field, not free text. A
+ * Profile that requires it authenticates with the test algorithm, which
+ * no live network runs, so it cannot be an Operational Profile whatever
+ * its metadata claims.
+ *
+ * That is an inference, and worth naming as one: SGP.22 section 2.4.5.3
+ * requires a Test Profile to carry profileClass 'test', but nothing in
+ * either specification says a Profile requiring the test algorithm must
+ * be one. It is simply the only reading that makes sense, and it is far
+ * better evidence than the header's profileType string, which is free
+ * text nobody parses.
+ *
+ * Returns 1 when the Profile declares it, 0 when it does not, and -1
+ * when the Profile could not be read -- which the caller can ignore,
+ * since profile_iccid has already reported it properly by then. */
+static int
+profile_wants_test_algorithm(const uint8_t *upp, size_t upp_len) {
+    ProfileElement_t *pe = NULL;
+    asn_dec_rval_t dr = ber_decode(NULL, &asn_DEF_ProfileElement,
+                                   (void **)&pe, upp, upp_len);
+    int ret = -1;
+    if(dr.code == RC_OK && pe && pe->present == ProfileElement_PR_header) {
+        ret = pe->choice.header.eUICC_Mandatory_services.usim_test_algorithm
+                  ? 1 : 0;
+    }
+    if(pe) ASN_STRUCT_FREE(asn_DEF_ProfileElement, pe);
+    return ret;
+}
+
 /* BF25 <len> 5A 0A <iccid> 91 <len> <spn> 92 <len> <name> [95 01 <class>].
    Built by hand because all these fields are short-form and there is
    nothing an encoder could get right that eleven constant-shaped bytes
@@ -1110,11 +1142,30 @@ cmd_metadata(const char *path, const char *out_path, const char *spn,
 
     uint8_t iccid[10];
     if(profile_iccid(upp, upp_len, iccid) != 0) { free(upp); return 2; }
-    free(upp);
 
     uint8_t iccid_ef[10];
     for(size_t k = 0; k < sizeof iccid; k++) {
         iccid_ef[k] = (uint8_t)((iccid[k] >> 4) | (iccid[k] << 4));
+    }
+
+    /* Read the class off the Profile rather than asking for it again.
+       A Profile that requires the USIM test algorithm cannot be an
+       Operational one, and leaving profileClass out is not neutral: an
+       eUICC reads its absence as operational, so silence produces a
+       Profile that misdescribes itself. An explicit --class still wins;
+       this only fills a gap, and says that it did. */
+    if(profile_class < 0 && profile_wants_test_algorithm(upp, upp_len) == 1) {
+        profile_class = 0;      /* ProfileClass test(0) */
+        fprintf(stderr,
+                "euicc: this profile declares usim-test-algorithm, so its "
+                "class is set to test\n"
+                "euicc: (SGP.22 section 2.4.5.3 -- pass --class to "
+                "override)\n");
+    } else if(profile_class < 0) {
+        fprintf(stderr,
+                "euicc: note: no --class given and the profile does not "
+                "declare usim-test-algorithm, so profileClass is left out "
+                "and an eUICC reads this profile as operational\n");
     }
 
     uint8_t md[128];
@@ -1122,6 +1173,7 @@ cmd_metadata(const char *path, const char *out_path, const char *spn,
                                    spn ? spn : "euicc-tools",
                                    name ? name : "test profile",
                                    profile_class);
+    free(upp);
     if(md_len == 0) {
         fprintf(stderr, "euicc: the profile name or provider is too long "
                         "(32 and 64 bytes are the limits)\n");
@@ -1161,13 +1213,6 @@ cmd_metadata(const char *path, const char *out_path, const char *spn,
        reports it as operational afterwards with nothing to explain why.
        Not defaulted to test, because that would be this command
        deciding what a Profile is; said out loud instead. */
-    if(profile_class < 0) {
-        fprintf(stderr,
-                "euicc: note: no --class given, so profileClass is absent "
-                "and an eUICC will read this profile as operational.\n"
-                "euicc: a Test Profile has to declare itself "
-                "(SGP.22 section 2.4.5.3) -- pass --class test.\n");
-    }
     return 0;
 }
 
