@@ -41,14 +41,6 @@ int es9_hex_decode(const char *in, uint8_t **out, size_t *out_len);
  * value is not a plain string. */
 int es9_json_string(const char *json, const char *key, char **out);
 
-/* Put an outer tag and a DER length back around fields that are already
-   complete TLVs. Exposed for the test that holds it against a recorded
-   response: reassembling has to be byte-exact, or the repacker refuses
-   what it would otherwise have accepted. Returns 0 or -1. */
-int es9_wrap(const uint8_t *tag, size_t tag_len,
-             uint8_t *const *fields, const size_t *lens, size_t n,
-             uint8_t **out, size_t *out_len);
-
 /* One ES9+ session against one SM-DP+. */
 typedef struct {
     char *base_url;   /* "https://host[:port]", no trailing slash */
