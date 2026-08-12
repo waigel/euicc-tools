@@ -61,6 +61,11 @@ void es9_client_free(es9_client_t *c);
 int es9_post(es9_client_t *c, const char *function, const char *body,
              char **resp);
 
+/* es9_post, with the HTTP status the specification gives that function's
+   MEP: 200 for the synchronous three, 204 for HandleNotification. */
+int es9_post_expect(es9_client_t *c, const char *function, const char *body,
+                    long expect_status, char **resp);
+
 /* The three functions, each taking what the card just said and handing
    back what the card is to be told next -- already repacked into the
    ES10b request, so a caller can pass it straight on.
@@ -77,6 +82,19 @@ int es9_initiate_authentication(es9_client_t *c,
 int es9_authenticate_client(es9_client_t *c, const char *transaction_id_hex,
                             const uint8_t *auth_server_resp, size_t resp_len,
                             uint8_t **prepare_download_req, size_t *req_len);
+
+/* Deliver one notification (ES9+ HandleNotification, SGP.22 v2.6
+   section 6.5.2.9). The Notification MEP, so the server answers 204 with
+   an empty body and says nothing about what it made of it -- an LPA has
+   no key to verify with and nothing to do with a verdict.
+
+   Returns 0 when the server took it, which is the only signal there is
+   and the only thing that licenses removing it from the card. -2 when
+   the server could not be reached or answered anything other than 204.
+   There is no -1: with no body there is nothing for the server to refuse
+   in. */
+int es9_handle_notification(es9_client_t *c,
+                            const uint8_t *pending, size_t pending_len);
 
 int es9_get_bound_profile_package(es9_client_t *c, const char *transaction_id_hex,
                                   const uint8_t *prepare_download_resp, size_t resp_len,
