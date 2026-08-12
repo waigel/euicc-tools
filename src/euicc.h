@@ -78,6 +78,13 @@ int diff_report(struct ProfileElement **want, int want_n, xmlDocPtr want_xml,
  */
 int cmd_card(int argc, char **argv);
 
+/* Write a Profile's StoreMetadataRequest, and name its ICCID on stderr.
+   What `smdp order add` needs before a card is anywhere near the
+   exchange -- see the definition in src/card.c for why the two cannot
+   be built separately. */
+int cmd_metadata(const char *path, const char *out_path, const char *spn,
+                 const char *name, int profile_class);
+
 /* ---- schema -------------------------------------------------------------- */
 
 /*
