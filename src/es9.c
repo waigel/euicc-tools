@@ -325,7 +325,7 @@ static int check_status(es9_client_t *c, const char *resp)
    produced, so euicc-lpa's repackers can be handed the same bytes they
    would have seen in-process. Every field arrives as its own complete
    TLV, so this only puts the outer tag and length back. */
-static int wrap(const uint8_t *tag, size_t tag_len,
+int es9_wrap(const uint8_t *tag, size_t tag_len,
                 uint8_t *const *fields, const size_t *lens, size_t n,
                 uint8_t **out, size_t *out_len)
 {
@@ -445,14 +445,14 @@ int es9_initiate_authentication(es9_client_t *c,
             note(c, "the transactionId is not hexadecimal");
             goto out;
         }
-        if (wrap(T0, 1, &tid, &tid_len, 1, &tidtlv, &tidtlv_len) != 0) {
+        if (es9_wrap(T0, 1, &tid, &tid_len, 1, &tidtlv, &tidtlv_len) != 0) {
             free(tid);
             goto out;
         }
         free(tid);
         all[0] = tidtlv; alllen[0] = tidtlv_len;
         for (i = 0; i < 4; i++) { all[i + 1] = f[i]; alllen[i + 1] = l[i]; }
-        if (wrap(SEQ, 1, all, alllen, 5, &ok, &ok_len) != 0) {
+        if (es9_wrap(SEQ, 1, all, alllen, 5, &ok, &ok_len) != 0) {
             free(tidtlv);
             goto out;
         }
@@ -529,26 +529,33 @@ int es9_authenticate_client(es9_client_t *c, const char *transaction_id_hex,
         uint8_t *all[5];
         size_t alllen[5];
         static const uint8_t T0[1] = { 0x80 };
-        static const uint8_t SEQ[1] = { 0x30 };
+        /* A0, not 30. rsp-2.5.asn is AUTOMATIC TAGS, and
+           AuthenticateClientResponseEs9's two alternatives carry no tags
+           of their own -- so X.680 numbers them, and authenticateClientOk
+           becomes [0] over a SEQUENCE, which is constructed context 0.
+           The first function's response never shows this because
+           euicc-rsp hands back its inner SEQUENCE rather than the CHOICE,
+           so the same reassembly is correct there with a plain 30. */
+        static const uint8_t OK_ARM[1] = { 0xa0 };
         static const uint8_t BF3B[2] = { 0xbf, 0x3b };
 
         if (es9_hex_decode(transaction_id_hex, &tid, &tid_len) != 0) {
             note(c, "the transactionId is not hexadecimal");
             goto out;
         }
-        if (wrap(T0, 1, &tid, &tid_len, 1, &tidtlv, &tidtlv_len) != 0) {
+        if (es9_wrap(T0, 1, &tid, &tid_len, 1, &tidtlv, &tidtlv_len) != 0) {
             free(tid);
             goto out;
         }
         free(tid);
         all[0] = tidtlv; alllen[0] = tidtlv_len;
         for (i = 0; i < 4; i++) { all[i + 1] = f[i]; alllen[i + 1] = l[i]; }
-        if (wrap(SEQ, 1, all, alllen, 5, &ok, &ok_len) != 0) {
+        if (es9_wrap(OK_ARM, 1, all, alllen, 5, &ok, &ok_len) != 0) {
             free(tidtlv);
             goto out;
         }
         free(tidtlv);
-        if (wrap(BF3B, 2, &ok, &ok_len, 1, &choice, &choice_len) != 0) goto out;
+        if (es9_wrap(BF3B, 2, &ok, &ok_len, 1, &choice, &choice_len) != 0) goto out;
     }
 
     ret = rsp_lpa_repack_prepare_download(choice, choice_len,
