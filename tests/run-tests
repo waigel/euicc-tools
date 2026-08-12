@@ -485,6 +485,24 @@ echo "$out" | grep -q "no-such-reader-euicc-tools-tests" \
   || bad "card info: an unknown reader name is named in the message"
 
 # A recording stands in for a card, so the happy path is testable in CI.
+# card notifications: the queue the eUICC keeps until somebody delivers
+# it. The recording is a real capture whose first three entries name
+# smdp-address-placeholder.invalid -- RFC 2606 guarantees that never
+# resolves, so those three can only ever be removed, not delivered.
+N="$root/vendor/euicc-lpa/testdata/cards/omnikey-notifications.log"
+"$E" card notifications --replay "$N" >/dev/null 2>&1 \
+    && ok "card notifications reads the queue" \
+    || bad "card notifications reads the queue"
+test "$("$E" card notifications --replay "$N" 2>/dev/null | wc -l | tr -d ' ')" = 5 \
+    && ok "...one line per pending notification" \
+    || bad "...one line per pending notification"
+"$E" card notifications --replay "$N" 2>/dev/null | grep -q "smdp-address-placeholder.invalid" \
+    && ok "...naming the address each was signed with" \
+    || bad "...naming the address each was signed with"
+"$E" card notifications --replay "$N" --json 2>/dev/null | grep -q '"seqNumber": 24' \
+    && ok "...and --json carries the sequence numbers" \
+    || bad "...and --json carries the sequence numbers"
+
 "$E" card info --replay "$root/vendor/euicc-lpa/testdata/cards/omnikey-info.log" >/dev/null 2>&1 \
   && ok "card info reads a recording" || bad "card info reads a recording"
 
