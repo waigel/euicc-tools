@@ -30,7 +30,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y autoconf automake libtool bison flex \
-            libxml2-dev libxslt1-dev python3-lxml libpcsclite-dev
+            libxml2-dev libxslt1-dev python3-lxml libpcsclite-dev \
+            libcurl4-openssl-dev
 
       - name: build euicc
         run: make
