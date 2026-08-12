@@ -620,6 +620,30 @@ cmd_card_deliver(const char *server, const char *server_ca,
  * cancel it -- section 5.5.1 has the eUICC reject the next
  * InitialiseSecureChannel while one is ongoing.
  */
+/* What each step was doing, for a message a person reads. A step number
+   is this file's own bookkeeping and means nothing to somebody watching
+   a download fail. */
+static const char *
+step_name(int step) {
+    /* Phrased so they read after both "the card refused while ..." and
+       "the SM-DP+ refused while ...", which means naming what was
+       happening rather than who was doing it -- otherwise the sentence
+       says SM-DP+ twice and still leaves a noun dangling. */
+    static const char *const WHAT[] = {
+        "starting",
+        "reading the eUICC's information",
+        "getting a challenge from the eUICC",
+        "opening the session",
+        "having the eUICC authenticate the server",
+        "having the server authenticate the eUICC",
+        "preparing the download on the eUICC",
+        "fetching the bound profile package",
+        "loading the package onto the eUICC"
+    };
+    return (step >= 0 && step < (int)(sizeof WHAT / sizeof *WHAT))
+        ? WHAT[step] : "somewhere in the exchange";
+}
+
 static int
 cmd_card_install_server(const char *server, const char *server_ca,
                         const char *smdp_address,
@@ -709,13 +733,20 @@ cmd_card_install_server(const char *server, const char *server_ca,
     goto out;
 
 card_failed:
-    fprintf(stderr, "euicc: the card refused at step %d\n", step);
+    fprintf(stderr, "euicc: the card refused while %s.\n", step_name(step));
     goto out;
 
 server_failed:
-    fprintf(stderr, "euicc: the SM-DP+ %s at step %d",
-            rc == -1 ? "refused" : "was reached but the exchange did not "
-                                    "complete", step);
+    /* -1 is the server answering no; -2 covers everything from an
+       unreachable host to an answer that would not parse, so the wording
+       must not claim it was reached. The detail follows from
+       c.last_error, which names which of the two it was. */
+    if(rc == -1) {
+        fprintf(stderr, "euicc: the SM-DP+ refused while %s", step_name(step));
+    } else {
+        fprintf(stderr, "euicc: the exchange with the SM-DP+ did not "
+                        "complete while %s", step_name(step));
+    }
     if(c.last_error) fprintf(stderr, ": %s", c.last_error);
     fprintf(stderr, "\n");
 
