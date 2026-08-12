@@ -360,6 +360,95 @@ cmd_card_profiles(const char *reader, const char *replay, const char *record,
 
 
 /*
+ * cmd_card_notifications -- what the eUICC is still waiting to have
+ * delivered.
+ *
+ * Every profile management operation leaves an entry in the eUICC's
+ * queue, and the eUICC keeps it until an LPA delivers it to the address
+ * the entry names and then says so. Nothing in this project has ever
+ * delivered one, so what this prints is the whole history of every
+ * install, enable, disable and delete the card has seen -- and a queue
+ * is finite: SGP.22 section 3.5 has the eUICC start refusing profile
+ * management once it fills.
+ *
+ * This is the unsigned half of a notification. The eUICC signs the
+ * notification itself, and that signature only arrives with
+ * RetrieveNotificationsList; the address and the operation printed here
+ * are an index, not evidence.
+ */
+static int
+cmd_card_notifications(const char *reader, const char *replay,
+                       const char *record, int as_json) {
+    static const char *const OP[] = { "install", "enable", "disable", "delete" };
+    rsp_transport_t t;
+    rsp_notification_info_t *n = NULL;
+    size_t count = 0;
+    long err = 0;
+    int no_isdr = 0;
+
+    if(open_card(reader, replay, record, &t) != 0) return 2;
+    int rc = rsp_card_list_notifications(&t, &n, &count, &err, &no_isdr);
+    t.close(&t);
+
+    if(rc != 0) {
+        if(no_isdr) {
+            fprintf(stderr, "euicc: the card refused to select the ISD-R. It "
+                            "may not be an eUICC.\n");
+        } else if(rc == -1) {
+            fprintf(stderr, "euicc: the eUICC refused to list its "
+                            "notifications (error %ld).\n", err);
+        } else {
+            fprintf(stderr, "euicc: the card could not be asked.\n");
+        }
+        return rc == -1 ? 1 : 2;
+    }
+
+    if(as_json) {
+        printf("{\n \"notifications\": [\n");
+        for(size_t i = 0; i < count; i++) {
+            printf("  { \"seqNumber\": %ld, \"operation\": ", n[i].seq_number);
+            if(n[i].operation >= 0 && n[i].operation < 4) {
+                printf("\"%s\"", OP[n[i].operation]);
+            } else {
+                printf("null");
+            }
+            printf(", \"notificationAddress\": ");
+            json_string(n[i].notification_address);
+            if(n[i].have_iccid) {
+                printf(", \"iccid\": \"");
+                for(size_t k = 0; k < sizeof n[i].iccid; k++) {
+                    printf("%02x", n[i].iccid[k]);
+                }
+                printf("\"");
+            }
+            printf(" }%s\n", i + 1 < count ? "," : "");
+        }
+        printf(" ]\n}\n");
+        rsp_card_notifications_free(n, count);
+        return 0;
+    }
+
+    if(count == 0) {
+        printf("no pending notifications\n");
+    }
+    for(size_t i = 0; i < count; i++) {
+        printf("%-6ld %-8s %s", n[i].seq_number,
+               (n[i].operation >= 0 && n[i].operation < 4)
+                   ? OP[n[i].operation] : "unknown",
+               n[i].notification_address);
+        if(n[i].have_iccid) {
+            printf("  ");
+            for(size_t k = 0; k < sizeof n[i].iccid; k++) {
+                printf("%02x", n[i].iccid[k]);
+            }
+        }
+        printf("\n");
+    }
+    rsp_card_notifications_free(n, count);
+    return 0;
+}
+
+/*
  * cmd_card_install_server -- the same install, with the SM-DP+ on the
  * other end of a network instead of inside this process.
  *
@@ -1299,6 +1388,8 @@ cmd_card(int argc, char **argv) {
 
     if(!strcmp(sub, "info")) return cmd_card_info(reader, replay, record, as_json);
     if(!strcmp(sub, "profiles")) return cmd_card_profiles(reader, replay, record, as_json);
+    if(!strcmp(sub, "notifications"))
+        return cmd_card_notifications(reader, replay, record, as_json);
     if(!strcmp(sub, "delete")) return cmd_card_delete(arg, reader, replay, record);
     if(!strcmp(sub, "enable")) return cmd_card_enable(arg, reader, replay, record);
     if(!strcmp(sub, "disable")) return cmd_card_disable(arg, reader, replay, record);
