@@ -20,6 +20,24 @@ value2 ProfileElement ::= end : { end-header { mandated NULL, identification 99 
 VN
 
 "$E" build "$tmp/good.vn" -o "$tmp/good.der" 2>/dev/null && ok "build writes DER" || bad "build writes DER"
+
+# metadata: the StoreMetadataRequest an SM-DP+ needs before any card is
+# involved. The ICCID must come out nibble-swapped into EFiccid's
+# ordering -- SGP.22 section 5.5.5 has the eUICC compare it against
+# EFiccid itself, and an unswapped value fails the install only at the
+# very end, reading like a profile fault.
+"$E" metadata "$tmp/good.der" -o "$tmp/md.der" 2>"$tmp/md.err" \
+    && ok "metadata writes a StoreMetadataRequest" \
+    || bad "metadata writes a StoreMetadataRequest"
+head -c2 "$tmp/md.der" | od -An -tx1 | tr -d ' \n' | grep -qi '^bf25' \
+    && ok "...tagged BF25, as section 5.5.3 defines it" \
+    || bad "...tagged BF25, as section 5.5.3 defines it"
+grep -q "^iccid 98001032547698103214$" "$tmp/md.err" \
+    && ok "...and it names the ICCID swapped into EFiccid ordering" \
+    || bad "...and it names the ICCID swapped into EFiccid ordering"
+"$E" metadata "$tmp/good.vn" >/dev/null 2>&1 \
+    && bad "metadata refuses something that is not a profile" \
+    || ok "metadata refuses something that is not a profile"
 test -s "$tmp/good.der" && ok "the DER is not empty" || bad "the DER is not empty"
 "$E" check "$tmp/good.der" >/dev/null 2>&1 && ok "a correct package passes" || bad "a correct package passes"
 "$E" show "$tmp/good.der" 2>/dev/null | grep -q "major-version 2" \

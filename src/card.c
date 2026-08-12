@@ -1070,6 +1070,89 @@ cmd_card_disable(const char *iccid_hex, const char *reader,
     return 2;
 }
 
+/*
+ * cmd_metadata -- write the StoreMetadataRequest for a Profile.
+ *
+ * The in-process install builds this for itself from the Profile it is
+ * about to send. A download from a real SM-DP+ cannot: the server holds
+ * the Profile and needs the metadata before any card is involved, and
+ * SGP.22 v2.6 section 5.5.5 has the eUICC compare the ICCID in the
+ * metadata against EFiccid inside the Profile and refuse the finished
+ * install on a disagreement -- installFailedDueToDataMismatch(13),
+ * after every Profile Element has already been processed, which reads
+ * like a Profile fault rather than a metadata one.
+ *
+ * So the two have to be built from one source, and this is how: the
+ * ICCID is read out of the Profile's own header rather than typed, the
+ * same way cmd_card_install reads it, and the nibble swap to EFiccid's
+ * ordering happens here once instead of being left to whoever fills in
+ * a flag.
+ *
+ * The ICCID goes to stderr, in the spelling `smdp order add --iccid`
+ * wants, because that command needs it too and copying it out of a hex
+ * dump by hand is exactly where a digit gets lost.
+ */
+int
+cmd_metadata(const char *path, const char *out_path, const char *spn,
+             const char *name, int profile_class) {
+    if(!path) {
+        fprintf(stderr, "euicc: metadata needs a profile package\n");
+        return 2;
+    }
+
+    size_t upp_len = 0;
+    uint8_t *upp = read_file(path, &upp_len);
+    if(!upp) {
+        fprintf(stderr, "euicc: cannot read %s\n", path);
+        return 2;
+    }
+
+    uint8_t iccid[10];
+    if(profile_iccid(upp, upp_len, iccid) != 0) { free(upp); return 2; }
+    free(upp);
+
+    uint8_t iccid_ef[10];
+    for(size_t k = 0; k < sizeof iccid; k++) {
+        iccid_ef[k] = (uint8_t)((iccid[k] >> 4) | (iccid[k] << 4));
+    }
+
+    uint8_t md[128];
+    size_t md_len = build_metadata(md, sizeof md, iccid_ef,
+                                   spn ? spn : "euicc-tools",
+                                   name ? name : "test profile",
+                                   profile_class);
+    if(md_len == 0) {
+        fprintf(stderr, "euicc: the profile name or provider is too long "
+                        "(32 and 64 bytes are the limits)\n");
+        return 2;
+    }
+
+    FILE *f = stdout;
+    if(out_path) {
+        f = fopen(out_path, "wb");
+        if(!f) {
+            fprintf(stderr, "euicc: cannot write %s\n", out_path);
+            return 2;
+        }
+    }
+    if(fwrite(md, 1, md_len, f) != md_len) {
+        fprintf(stderr, "euicc: short write\n");
+        if(out_path) fclose(f);
+        return 2;
+    }
+    if(out_path && fclose(f) != 0) {
+        fprintf(stderr, "euicc: cannot write %s\n", out_path);
+        return 2;
+    }
+
+    fprintf(stderr, "iccid ");
+    for(size_t k = 0; k < sizeof iccid_ef; k++) {
+        fprintf(stderr, "%02x", iccid_ef[k]);
+    }
+    fprintf(stderr, "\n");
+    return 0;
+}
+
 int
 cmd_card(int argc, char **argv) {
     if(argc < 1) {

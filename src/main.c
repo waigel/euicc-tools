@@ -656,6 +656,7 @@ cmd_completion(const char *shell) {
 "    'schema:the schema as JSON, for an editor'\n"
 "    'fmt:value notation laid out, one member to a line'\n"
 "    'card:ask a physical eUICC, or a recording, what it is'\n"
+"    'metadata:a profile in, its StoreMetadataRequest out'\n"
 "    'version:what this binary is'\n"
 "    'completion:a completion script for zsh or bash'\n"
 "  )\n"
@@ -702,7 +703,7 @@ cmd_completion(const char *shell) {
 "_euicc() {\n"
 "  local cur=\"${COMP_WORDS[COMP_CWORD]}\"\n"
 "  if [ \"$COMP_CWORD\" -eq 1 ]; then\n"
-"    COMPREPLY=($(compgen -W \"build show check diff schema fmt card version completion\" -- \"$cur\"))\n"
+"    COMPREPLY=($(compgen -W \"build show check diff schema fmt card metadata version completion\" -- \"$cur\"))\n"
 "    return\n"
 "  fi\n"
 "  if [ \"${COMP_WORDS[1]}\" = completion ]; then\n"
@@ -745,6 +746,8 @@ usage(void) {
         "  schema   the schema as JSON, for an editor\n"
         "  fmt      value notation laid out, one member to a line\n"
         "  card     ask a physical eUICC, or a recording, what it is\n"
+        "  metadata a profile in, its StoreMetadataRequest out -- what an\n"
+        "           SM-DP+ needs before a card is involved\n"
         "  version  what this binary is, for a bug report or an editor\n"
         "  completion  a completion script for zsh or bash, to stdout\n"
         "\n"
@@ -815,6 +818,29 @@ main(int argc, char **argv) {
        use for libxml2/libxslt either -- so it is dispatched before any
        of that runs, not folded into the shared loop. */
     if(!strcmp(cmd, "card")) return cmd_card(argc - 2, argv + 2);
+    if(!strcmp(cmd, "metadata")) {
+        const char *path = NULL, *out = NULL, *spn = NULL, *name = NULL;
+        int profile_class = -1;
+        for(int i = 2; i < argc; i++) {
+            if(!strcmp(argv[i], "-o") && i + 1 < argc) out = argv[++i];
+            else if(!strcmp(argv[i], "--provider") && i + 1 < argc) spn = argv[++i];
+            else if(!strcmp(argv[i], "--name") && i + 1 < argc) name = argv[++i];
+            else if(!strcmp(argv[i], "--class") && i + 1 < argc) {
+                const char *c = argv[++i];
+                if(!strcmp(c, "test")) profile_class = 0;
+                else if(!strcmp(c, "provisioning")) profile_class = 1;
+                else if(!strcmp(c, "operational")) profile_class = 2;
+                else {
+                    fprintf(stderr, "euicc: metadata: --class takes test, "
+                                    "provisioning or operational, not %s\n", c);
+                    return 2;
+                }
+            }
+            else if(argv[i][0] != '-' && !path) path = argv[i];
+            else { usage(); return 2; }
+        }
+        return cmd_metadata(path, out, spn, name, profile_class);
+    }
     const char *in = NULL, *out = NULL;
     const char *rules = EUICC_RULES_DIR, *skel = EUICC_SKEL_DIR;
     const char *files[256];
