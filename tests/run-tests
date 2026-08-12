@@ -38,6 +38,16 @@ grep -q "^iccid 98001032547698103214$" "$tmp/md.err" \
 "$E" metadata "$tmp/good.vn" >/dev/null 2>&1 \
     && bad "metadata refuses something that is not a profile" \
     || ok "metadata refuses something that is not a profile"
+grep -q "class test" "$tmp/md.err" \
+    && ok "...and says so when profileClass is left out" \
+    || bad "...and says so when profileClass is left out"
+"$E" metadata "$tmp/good.der" --class test -o "$tmp/md2.der" 2>"$tmp/md2.err"
+grep -q "class test" "$tmp/md2.err" \
+    && bad "no note once --class is given" \
+    || ok "no note once --class is given"
+cmp -s "$tmp/md.der" "$tmp/md2.der" \
+    && bad "--class test changes the metadata" \
+    || ok "--class test changes the metadata"
 test -s "$tmp/good.der" && ok "the DER is not empty" || bad "the DER is not empty"
 "$E" check "$tmp/good.der" >/dev/null 2>&1 && ok "a correct package passes" || bad "a correct package passes"
 "$E" show "$tmp/good.der" 2>/dev/null | grep -q "major-version 2" \
