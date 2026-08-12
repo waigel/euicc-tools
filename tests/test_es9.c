@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "es9.h"
+#include "rsp.h"
 
 static int fails;
 static void ok(const char *what, int good) {
@@ -126,6 +127,60 @@ int main(void) {
            es9_json_string("{\"n\":\"a\\u0041b\"}", "n", &v) == -1);
         ok("an unterminated string is refused",
            es9_json_string("{\"n\":\"abc", "n", &v) == -1);
+    }
+
+    /* ---- reassembling a response, byte for byte ------------------ */
+    {
+        /* The JSON binding sends an ES9+ answer as separate fields, and
+           euicc-lpa's repackers want the encoding the SM-DP+ produced.
+           Putting it back together has to be byte-exact or the repacker
+           refuses what it would otherwise accept -- which is how the
+           first real download failed, on a tag: AuthenticateClientOk is
+           reached as [0] over a SEQUENCE, A0, because rsp-2.5.asn is
+           AUTOMATIC TAGS and the CHOICE's alternatives carry no tags of
+           their own. A plain 30 looks right and is not.
+
+           euicc-rsp records a real session, so the check is exact rather
+           than a shape assertion: split its recorded response into
+           fields the way a server would send them, put it back, and
+           require the same bytes. */
+        static const char PATH[] =
+            "vendor/euicc-lpa/vendor/euicc-rsp/testdata/session/"
+            "authenticate-response.der";
+        FILE *f = fopen(PATH, "rb");
+        ok("the recorded AuthenticateClient response is readable", f != NULL);
+        if(f) {
+            uint8_t orig[4096];
+            size_t n = fread(orig, 1, sizeof orig, f);
+            rsp_dp_authenticate_fields_t g;
+            fclose(f);
+            memset(&g, 0, sizeof g);
+            ok("it splits into the five fields the binding names",
+               n > 0 && rsp_dp_authenticate_fields(orig, n, &g) == 0);
+            if(n > 0 && g.transaction_id_len) {
+                uint8_t *all[5];
+                size_t l[5];
+                uint8_t *arm = NULL, *choice = NULL;
+                size_t arm_len = 0, choice_len = 0;
+                static const uint8_t OK_ARM[1] = { 0xa0 };
+                static const uint8_t BF3B[2] = { 0xbf, 0x3b };
+
+                all[0] = (uint8_t *)g.transaction_id;   l[0] = g.transaction_id_len;
+                all[1] = (uint8_t *)g.profile_metadata; l[1] = g.profile_metadata_len;
+                all[2] = (uint8_t *)g.smdp_signed2;     l[2] = g.smdp_signed2_len;
+                all[3] = (uint8_t *)g.smdp_signature2;  l[3] = g.smdp_signature2_len;
+                all[4] = (uint8_t *)g.smdp_certificate; l[4] = g.smdp_certificate_len;
+
+                ok("the ok arm wraps", es9_wrap(OK_ARM, 1, all, l, 5,
+                                                 &arm, &arm_len) == 0);
+                ok("the CHOICE wraps", es9_wrap(BF3B, 2, &arm, &arm_len, 1,
+                                                 &choice, &choice_len) == 0);
+                ok("and the result is the recorded bytes, exactly",
+                   choice && choice_len == n && memcmp(choice, orig, n) == 0);
+                free(arm);
+                free(choice);
+            }
+        }
     }
 
     return fails ? 1 : 0;
