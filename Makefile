@@ -74,12 +74,19 @@ SKELDIR := $(ASN1C)/skeletons
 SKEL ?= $(shell python3 -c "import lxml.isoschematron as i,os;\
           print(os.path.join(os.path.dirname(i.__file__),'resources','xsl','iso-schematron-xslt1'))" 2>/dev/null)
 
+# libcurl carries the ES9+ client (src/es9.c): HTTPS, TLS and the
+# certificate checking SGP.22 section 6.1 requires on that interface.
+# Discovered like libxml2 below rather than assumed, and its absence is
+# reported by the link rule rather than by a confusing compiler error.
+CURL_CFLAGS := $(shell curl-config --cflags 2>/dev/null)
+CURL_LIBS   := $(shell curl-config --libs 2>/dev/null)
+
 XML_CFLAGS := $(shell xml2-config --cflags 2>/dev/null) \
               $(shell pkg-config --cflags libxslt 2>/dev/null)
 XML_LIBS   := $(shell xml2-config --libs 2>/dev/null) \
               $(shell pkg-config --libs libxslt 2>/dev/null || echo -lxslt)
 
-INC := -Isrc -Ibuild -I$(VN)/include -I$(VN)/src -I$(SKELDIR) -I$(LPA)/include -I$(RSP)/include $(XML_CFLAGS)
+INC := -Isrc -Ibuild -I$(VN)/include -I$(VN)/src -I$(SKELDIR) -I$(LPA)/include -I$(RSP)/include $(XML_CFLAGS) $(CURL_CFLAGS)
 # The schema source, so `euicc schema` can say where a type is declared. Only
 # a location: the schema itself is read from asn1c's descriptors and never
 # from this file.
@@ -109,7 +116,7 @@ endif
 
 ALL_CFLAGS = $(STD) $(WARN) $(CFLAGS) $(EXTRA) $(INC) $(DEF) $(RSP_MBED_CFG)
 
-OWN_SRCS := src/main.c src/schematron.c src/diff.c src/schema.c src/format.c src/card.c
+OWN_SRCS := src/main.c src/schematron.c src/diff.c src/schema.c src/format.c src/card.c src/es9.c
 VN_SRCS  := $(wildcard $(VN)/src/*.c)
 GEN_SRCS  = $(filter-out $(DIST)/converter-example.c, $(wildcard $(DIST)/*.c))
 
@@ -283,12 +290,28 @@ euicc: $(OWN_SRCS) src/euicc.h build/vn_annotations.c build/gen/.stamp \
 	@test -n "$(XML_LIBS)" || { \
 	    echo "libxml2 and libxslt are needed; install them and try again" >&2; \
 	    exit 1; }
+	@test -n "$(CURL_LIBS)" || { \
+	    echo "libcurl is needed for 'card install --server'; install it" >&2; \
+	    echo "and try again (curl-config was not found on PATH)" >&2; \
+	    exit 1; }
 	$(CC) $(ALL_CFLAGS) -idirafter $(abspath $(DIST)) \
 	    $(OWN_SRCS) $(VN_SRCS) build/vn_annotations.c build/gen/*.o \
 	    build/libeuicc-full.a $(RSP_MBED_LIBS) $(RSP_MBED_LDLIBS) $(RSP_PCSC_LIBS) \
-	    -o $@ $(XML_LIBS) -lm
+	    -o $@ $(XML_LIBS) $(CURL_LIBS) -lm
 
-check: euicc
+# The pure parts of the ES9+ client -- base64, hexadecimal and the JSON
+# reader -- get a C test of their own. tests/run-tests drives the binary
+# from outside, which cannot reach them, and they are exactly where a bug
+# would be silent rather than loud.
+tests/run-es9: tests/test_es9.c src/es9.c src/es9.h build/libeuicc-full.a Makefile
+	$(CC) $(ALL_CFLAGS) -idirafter $(abspath $(DIST)) \
+	    tests/test_es9.c src/es9.c build/libeuicc-full.a \
+	    $(RSP_MBED_LIBS) $(RSP_MBED_LDLIBS) $(RSP_PCSC_LIBS) \
+	    -o $@ $(CURL_LIBS) -lm
+	@rm -rf $@.dSYM
+
+check: euicc tests/run-es9
+	./tests/run-es9
 	./tests/run-tests
 
 # The rule set and the Schematron transforms are compiled in as absolute paths,

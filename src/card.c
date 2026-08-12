@@ -26,6 +26,7 @@
  * command's 2: neither is a trust verdict, since without EUICCInfo2 there
  * is nothing for rsp_card_trusts to ask a question about.
  */
+#include "es9.h"
 #include "euicc.h"
 
 #include <lpa.h>
@@ -357,6 +358,159 @@ cmd_card_profiles(const char *reader, const char *replay, const char *record,
     return 0;
 }
 
+
+/*
+ * cmd_card_install_server -- the same install, with the SM-DP+ on the
+ * other end of a network instead of inside this process.
+ *
+ * The difference is not only the transport. Here the LPA is only an LPA:
+ * the Profile, its metadata and every signature come from the server,
+ * so there is no file to read and no metadata to build. Which Profile
+ * arrives is the server's decision, not this command's.
+ *
+ * rsp_lpa_install cannot be used, because it drives all nine steps in
+ * one call and five of them are now HTTP round trips. The steps are
+ * therefore run here, in the order SGP.22 sections 3.1.2 and 3.1.3 fix,
+ * alternating card and server:
+ *
+ *   1 ES10b GetEUICCInfo        card
+ *   2 ES10b GetEUICCChallenge   card
+ *   3 ES9+  InitiateAuthentication   server
+ *   4 ES10b AuthenticateServer  card
+ *   5 ES9+  AuthenticateClient  server
+ *   6 ES10b PrepareDownload     card
+ *   7 ES9+  GetBoundProfilePackage   server
+ *   8 ES10b LoadBoundProfilePackage  card
+ *
+ * There is no ninth step. In the in-process path that is where the
+ * ProfileInstallationResult is checked against the eUICC's own
+ * signature, and that check belongs to the SM-DP+, which holds the
+ * session and the public key. A real LPA does not verify it either --
+ * it has no key to verify with. So what this command reports is what
+ * the card said, marked as such, and the verification happens where the
+ * server receives the notification. That step does not exist yet in
+ * this project (see euicc-smdp), which is why this says so rather than
+ * quietly printing a verdict it did not establish.
+ *
+ * From step 3 onward the card holds a session, and every exit has to
+ * cancel it -- section 5.5.1 has the eUICC reject the next
+ * InitialiseSecureChannel while one is ongoing.
+ */
+static int
+cmd_card_install_server(const char *server, const char *server_ca,
+                        const char *smdp_address,
+                        const char *reader, const char *replay,
+                        const char *record) {
+    es9_client_t c;
+    rsp_transport_t t;
+    uint8_t *info1 = NULL, *auth_req = NULL, *auth_resp = NULL;
+    uint8_t *prep_req = NULL, *prep_resp = NULL, *bpp = NULL, *result = NULL;
+    size_t info1_len = 0, auth_req_len = 0, auth_resp_len = 0;
+    size_t prep_req_len = 0, prep_resp_len = 0, bpp_len = 0, result_len = 0;
+    char *tid_hex = NULL;
+    uint8_t challenge[16];
+    uint8_t tid[16];
+    size_t tid_len = 0;
+    int rc, ret = 2, step = 0, have_session = 0;
+
+    memset(&c, 0, sizeof c);
+    c.base_url = strdup(server);
+    c.ca_file = server_ca ? strdup(server_ca) : NULL;
+    if(!c.base_url || (server_ca && !c.ca_file)) {
+        fprintf(stderr, "euicc: out of memory\n");
+        es9_client_free(&c);
+        return 2;
+    }
+
+    if(open_card(reader, replay, record, &t) != 0) {
+        es9_client_free(&c);
+        return 2;
+    }
+
+    step = 1;
+    if(rsp_card_get_info1(&t, &info1, &info1_len, NULL) != 0) goto card_failed;
+
+    step = 2;
+    if(rsp_card_get_challenge(&t, challenge, NULL) != 0) goto card_failed;
+
+    step = 3;
+    rc = es9_initiate_authentication(&c, challenge, sizeof challenge,
+                                     info1, info1_len, smdp_address,
+                                     &tid_hex, &auth_req, &auth_req_len);
+    if(rc != 0) goto server_failed;
+    /* Kept so a failure from here on can cancel the card's session with
+       the transactionId the card is holding. */
+    {
+        uint8_t *raw = NULL;
+        if(es9_hex_decode(tid_hex, &raw, &tid_len) == 0 && tid_len == sizeof tid) {
+            memcpy(tid, raw, sizeof tid);
+            have_session = 1;
+        }
+        free(raw);
+    }
+
+    step = 4;
+    if(rsp_card_authenticate_server(&t, auth_req, auth_req_len,
+                                    &auth_resp, &auth_resp_len, NULL) != 0) {
+        goto card_failed;
+    }
+
+    step = 5;
+    rc = es9_authenticate_client(&c, tid_hex, auth_resp, auth_resp_len,
+                                 &prep_req, &prep_req_len);
+    if(rc != 0) goto server_failed;
+
+    step = 6;
+    if(rsp_card_prepare_download(&t, prep_req, prep_req_len,
+                                 &prep_resp, &prep_resp_len, NULL) != 0) {
+        goto card_failed;
+    }
+
+    step = 7;
+    rc = es9_get_bound_profile_package(&c, tid_hex, prep_resp, prep_resp_len,
+                                       &bpp, &bpp_len);
+    if(rc != 0) goto server_failed;
+
+    step = 8;
+    if(rsp_card_load_bpp(&t, bpp, bpp_len, &result, &result_len, NULL) != 0) {
+        goto card_failed;
+    }
+
+    have_session = 0; /* a completed load ends the session by itself */
+    printf("the card accepted the Bound Profile Package "
+           "(%zu bytes of ProfileInstallationResult)\n", result_len);
+    printf("this result is the card's own word, not checked here: the "
+           "signature over it is for the SM-DP+ to verify\n");
+    ret = 0;
+    goto out;
+
+card_failed:
+    fprintf(stderr, "euicc: the card refused at step %d\n", step);
+    goto out;
+
+server_failed:
+    fprintf(stderr, "euicc: the SM-DP+ %s at step %d",
+            rc == -1 ? "refused" : "could not be reached", step);
+    if(c.last_error) fprintf(stderr, ": %s", c.last_error);
+    fprintf(stderr, "\n");
+
+out:
+    if(have_session) {
+        /* loadBppExecutionError(5): the download broke off part way. */
+        rsp_card_cancel_session(&t, tid, 5, NULL);
+    }
+    t.close(&t);
+    es9_client_free(&c);
+    free(info1);
+    free(auth_req);
+    free(auth_resp);
+    free(prep_req);
+    free(prep_resp);
+    free(bpp);
+    free(result);
+    free(tid_hex);
+    return ret;
+}
 
 /*
  * cmd_card_install -- build a Bound Profile Package for this card and
@@ -929,6 +1083,11 @@ cmd_card(int argc, char **argv) {
     const char *reader = NULL, *replay = NULL, *record = NULL;
     const char *arg = NULL;   /* the one positional a subcommand may take */
     const char *spn = NULL, *name = NULL;
+    const char *server = NULL, *server_ca = NULL;
+    /* The address the LPA tells the SM-DP+ it used. Section 5.6.1 has
+       the server compare it against its own, so it has to be the name
+       the server knows itself by -- taken from --server's URL below. */
+    const char *smdp_address = NULL;
     int as_json = 0;
     /* -1 means "leave the field out", which an eUICC reads as operational
        -- see build_metadata. Named rather than numeric on the command
@@ -954,6 +1113,9 @@ cmd_card(int argc, char **argv) {
                 return 2;
             }
         }
+        else if(!strcmp(argv[i], "--server") && i + 1 < argc) server = argv[++i];
+        else if(!strcmp(argv[i], "--server-ca") && i + 1 < argc)
+            server_ca = argv[++i];
         else if(!strcmp(argv[i], "--json")) as_json = 1;
         else if(argv[i][0] != '-' && !arg) arg = argv[i];
         else {
@@ -961,6 +1123,25 @@ cmd_card(int argc, char **argv) {
                     argv[i]);
             return 2;
         }
+    }
+
+    /* smdpAddress is the host out of --server: it is what section 5.6.1
+       has the server check against its own address, and taking it from
+       the URL means the two cannot be given differently by mistake. */
+    static char host_buf[256];
+    if(server) {
+        const char *h = strstr(server, "://");
+        const char *end;
+        h = h ? h + 3 : server;
+        end = strpbrk(h, "/:");
+        size_t n = end ? (size_t)(end - h) : strlen(h);
+        if(n == 0 || n >= sizeof host_buf) {
+            fprintf(stderr, "euicc: card %s: --server has no host in it\n", sub);
+            return 2;
+        }
+        memcpy(host_buf, h, n);
+        host_buf[n] = '\0';
+        smdp_address = host_buf;
     }
 
     if(replay && reader) {
@@ -975,9 +1156,36 @@ cmd_card(int argc, char **argv) {
     if(!strcmp(sub, "delete")) return cmd_card_delete(arg, reader, replay, record);
     if(!strcmp(sub, "enable")) return cmd_card_enable(arg, reader, replay, record);
     if(!strcmp(sub, "disable")) return cmd_card_disable(arg, reader, replay, record);
-    if(!strcmp(sub, "install"))
+    if(!strcmp(sub, "install")) {
+        if(server) {
+            /* With a server there is no local Profile: which one arrives
+               is the SM-DP+'s decision. Accepting a file here as well
+               would leave two answers to that question and no way to
+               tell which one the card got. */
+            if(arg) {
+                fprintf(stderr, "euicc: card install: --server takes the "
+                                "Profile from the server, so a file cannot "
+                                "be given too\n");
+                return 2;
+            }
+            if(spn || name || profile_class >= 0) {
+                fprintf(stderr, "euicc: card install: --provider, --name and "
+                                "--class describe metadata this command "
+                                "builds itself; with --server the SM-DP+ "
+                                "sends it instead\n");
+                return 2;
+            }
+            return cmd_card_install_server(server, server_ca, smdp_address,
+                                           reader, replay, record);
+        }
+        if(server_ca) {
+            fprintf(stderr, "euicc: card install: --server-ca only means "
+                            "something with --server\n");
+            return 2;
+        }
         return cmd_card_install(arg, spn, name, profile_class,
                                 reader, replay, record);
+    }
 
     fprintf(stderr, "euicc: card %s: unknown subcommand\n", sub);
     return 2;
