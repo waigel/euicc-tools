@@ -490,7 +490,8 @@ card_failed:
 
 server_failed:
     fprintf(stderr, "euicc: the SM-DP+ %s at step %d",
-            rc == -1 ? "refused" : "could not be reached", step);
+            rc == -1 ? "refused" : "was reached but the exchange did not "
+                                    "complete", step);
     if(c.last_error) fprintf(stderr, ": %s", c.last_error);
     fprintf(stderr, "\n");
 
