@@ -449,6 +449,141 @@ cmd_card_notifications(const char *reader, const char *replay,
 }
 
 /*
+ * cmd_card_deliver -- the notification cycle, as SGP.22 has an LPA run
+ * it: retrieve, deliver, and only then remove.
+ *
+ * The order is the whole point. A notification removed before it was
+ * delivered is gone -- the eUICC keeps no second copy, and the SM-DP+
+ * never learns what became of its Profile. So nothing is removed unless
+ * the server answered 204, which is the only signal the Notification MEP
+ * provides.
+ *
+ * Each notification names its own destination. That address is the
+ * eUICC's choice, not this command's, and it comes from the Profile's
+ * notificationConfigurationInfo -- so a queue can hold entries for
+ * several different servers, and one unreachable server must not stop
+ * the others being delivered. --server overrides it, for a person
+ * testing against a server the card was never told about.
+ *
+ * Some notifications can never be delivered at all: this project once
+ * signed "smdp-address-placeholder.invalid" as its SM-DP+ address, and
+ * RFC 2606 guarantees that name never resolves. They are reported and
+ * left alone rather than counted as failures -- removing them would be
+ * discarding evidence, and retrying them forever would be pretending.
+ */
+static int
+cmd_card_deliver(const char *server, const char *server_ca,
+                 const char *reader, const char *replay, const char *record) {
+    rsp_transport_t t;
+    rsp_notification_info_t *meta = NULL;
+    rsp_pending_notification_t *pend = NULL;
+    size_t meta_count = 0, pend_count = 0;
+    long err = 0;
+    int no_isdr = 0, delivered = 0, failed = 0, undeliverable = 0;
+
+    if(open_card(reader, replay, record, &t) != 0) return 2;
+
+    if(rsp_card_list_notifications(&t, &meta, &meta_count, &err, &no_isdr) != 0) {
+        fprintf(stderr, "euicc: the card would not list its notifications.\n");
+        t.close(&t);
+        return 2;
+    }
+    if(meta_count == 0) {
+        printf("no pending notifications\n");
+        rsp_card_notifications_free(meta, meta_count);
+        t.close(&t);
+        return 0;
+    }
+
+    if(rsp_card_retrieve_notifications(&t, &pend, &pend_count, &err,
+                                       &no_isdr) != 0) {
+        fprintf(stderr, "euicc: the card would not hand over its "
+                        "notifications.\n");
+        rsp_card_notifications_free(meta, meta_count);
+        t.close(&t);
+        return 2;
+    }
+    if(pend_count != meta_count) {
+        /* The two commands answer the same queue; a disagreement means
+           it changed underneath, and pairing them by position would put
+           one notification's bytes behind another's address. */
+        fprintf(stderr, "euicc: the card listed %zu notifications and handed "
+                        "over %zu; the queue changed while it was being "
+                        "read.\n", meta_count, pend_count);
+        rsp_card_notifications_free(meta, meta_count);
+        rsp_card_pending_free(pend, pend_count);
+        t.close(&t);
+        return 2;
+    }
+
+    for(size_t i = 0; i < pend_count; i++) {
+        const char *addr = server ? server : meta[i].notification_address;
+        es9_client_t c;
+        char url[512];
+
+        /* RFC 2606 reserves .invalid so that it can never resolve.
+           Trying is not a failure of this run; it is a fact about that
+           notification. */
+        if(!server) {
+            size_t al = strlen(meta[i].notification_address);
+            if(al >= 8 && strcmp(meta[i].notification_address + al - 8,
+                                 ".invalid") == 0) {
+                printf("%-6ld skipped   %s (never resolves; left on the card)\n",
+                       meta[i].seq_number, meta[i].notification_address);
+                undeliverable++;
+                continue;
+            }
+            if(snprintf(url, sizeof url, "https://%s", addr) >= (int)sizeof url) {
+                failed++;
+                continue;
+            }
+            addr = url;
+        }
+
+        memset(&c, 0, sizeof c);
+        c.base_url = strdup(addr);
+        c.ca_file = server_ca ? strdup(server_ca) : NULL;
+        if(!c.base_url || (server_ca && !c.ca_file)) {
+            es9_client_free(&c);
+            failed++;
+            continue;
+        }
+
+        if(es9_handle_notification(&c, pend[i].der, pend[i].der_len) != 0) {
+            printf("%-6ld failed    %s", meta[i].seq_number, addr);
+            if(c.last_error) printf(": %s", c.last_error);
+            printf("\n");
+            es9_client_free(&c);
+            failed++;
+            continue;
+        }
+        es9_client_free(&c);
+
+        /* Only now. The server took it, so the card may forget it. */
+        {
+            long result = 0;
+            if(rsp_card_notification_sent(&t, meta[i].seq_number, &result,
+                                          NULL) != 0) {
+                printf("%-6ld delivered but the card would not drop it "
+                       "(status %ld)\n", meta[i].seq_number, result);
+                failed++;
+                continue;
+            }
+        }
+        printf("%-6ld delivered %s\n", meta[i].seq_number, addr);
+        delivered++;
+    }
+
+    printf("%d delivered, %d failed, %d undeliverable\n",
+           delivered, failed, undeliverable);
+
+    rsp_card_notifications_free(meta, meta_count);
+    rsp_card_pending_free(pend, pend_count);
+    t.close(&t);
+    return failed > 0 ? 1 : 0;
+}
+
+/*
  * cmd_card_install_server -- the same install, with the SM-DP+ on the
  * other end of a network instead of inside this process.
  *
@@ -1390,6 +1525,8 @@ cmd_card(int argc, char **argv) {
     if(!strcmp(sub, "profiles")) return cmd_card_profiles(reader, replay, record, as_json);
     if(!strcmp(sub, "notifications"))
         return cmd_card_notifications(reader, replay, record, as_json);
+    if(!strcmp(sub, "deliver"))
+        return cmd_card_deliver(server, server_ca, reader, replay, record);
     if(!strcmp(sub, "delete")) return cmd_card_delete(arg, reader, replay, record);
     if(!strcmp(sub, "enable")) return cmd_card_enable(arg, reader, replay, record);
     if(!strcmp(sub, "disable")) return cmd_card_disable(arg, reader, replay, record);

@@ -215,6 +215,12 @@ static size_t collect(void *data, size_t sz, size_t n, void *key)
 int es9_post(es9_client_t *c, const char *function, const char *body,
              char **resp)
 {
+    return es9_post_expect(c, function, body, 200, resp);
+}
+
+int es9_post_expect(es9_client_t *c, const char *function, const char *body,
+                    long expect_status, char **resp)
+{
     CURL *h;
     struct curl_slist *hdr = NULL;
     struct body got = { NULL, 0 };
@@ -259,16 +265,21 @@ int es9_post(es9_client_t *c, const char *function, const char *body,
     }
     curl_easy_getinfo(h, CURLINFO_RESPONSE_CODE, &status);
     /* Section 6.3: a synchronous function answers 200 whether it
-       succeeded or failed. Anything else is the transport, not the
-       function, and is therefore -2 rather than a refusal. */
-    if (status != 200) {
+       succeeded or failed, and the Notification MEP answers 204 with an
+       empty body. Which one is expected comes from the caller, because
+       it is a property of the function, not of this transport. Anything
+       else is the transport failing rather than the function, and is
+       therefore -2 rather than a refusal. */
+    if (status != expect_status) {
         char msg[64];
         snprintf(msg, sizeof msg, "HTTP %ld", status);
         free(c->last_error);
         c->last_error = strdup(msg);
         goto out;
     }
-    if (!got.p) goto out;
+    /* A 204 body is empty by definition, so an empty one is not a
+       failure there the way it is for the synchronous functions. */
+    if (!got.p && expect_status != 204) goto out;
 
     *resp = got.p;
     got.p = NULL;
@@ -480,6 +491,30 @@ out:
     free(body);
     free(resp);
     free_fields(f, 4);
+    return ret;
+}
+
+int es9_handle_notification(es9_client_t *c,
+                            const uint8_t *pending, size_t pending_len)
+{
+    char *b64 = NULL, *body = NULL, *resp = NULL;
+    int ret = -2;
+
+    if (!c || !pending || pending_len == 0) return -2;
+    if (es9_b64_encode(pending, pending_len, &b64) != 0) goto out;
+    if (asprintf(&body, "{\"pendingNotification\":\"%s\"}", b64) < 0) {
+        body = NULL;
+        goto out;
+    }
+    /* es9_post insists on 200, which is right for the three synchronous
+       functions and wrong for this one: section 6.3 gives the
+       Notification MEP 204 and an empty body. */
+    ret = es9_post_expect(c, "handleNotification", body, 204, &resp);
+
+out:
+    free(b64);
+    free(body);
+    free(resp);
     return ret;
 }
 
