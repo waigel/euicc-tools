@@ -321,49 +321,6 @@ static int check_status(es9_client_t *c, const char *resp)
     return ret;
 }
 
-/* Reassemble an ES9+ response's fields back into the encoding the SM-DP+
-   produced, so euicc-lpa's repackers can be handed the same bytes they
-   would have seen in-process. Every field arrives as its own complete
-   TLV, so this only puts the outer tag and length back. */
-int es9_wrap(const uint8_t *tag, size_t tag_len,
-                uint8_t *const *fields, const size_t *lens, size_t n,
-                uint8_t **out, size_t *out_len)
-{
-    size_t body = 0, i, o;
-    uint8_t len_oct[8];
-    size_t len_n = 0;
-    uint8_t *b;
-
-    for (i = 0; i < n; i++) body += lens[i];
-
-    /* DER definite length, minimal, same rule euicc-rsp encodes with. */
-    if (body < 0x80) { len_oct[0] = (uint8_t)body; len_n = 1; }
-    else if (body <= 0xFF) { len_oct[0] = 0x81; len_oct[1] = (uint8_t)body; len_n = 2; }
-    else if (body <= 0xFFFF) {
-        len_oct[0] = 0x82;
-        len_oct[1] = (uint8_t)(body >> 8);
-        len_oct[2] = (uint8_t)body;
-        len_n = 3;
-    } else {
-        len_oct[0] = 0x83;
-        len_oct[1] = (uint8_t)(body >> 16);
-        len_oct[2] = (uint8_t)(body >> 8);
-        len_oct[3] = (uint8_t)body;
-        len_n = 4;
-    }
-
-    b = malloc(tag_len + len_n + body);
-    if (!b) return -1;
-    memcpy(b, tag, tag_len);
-    o = tag_len;
-    memcpy(b + o, len_oct, len_n);
-    o += len_n;
-    for (i = 0; i < n; i++) { memcpy(b + o, fields[i], lens[i]); o += lens[i]; }
-    *out = b;
-    *out_len = o;
-    return 0;
-}
-
 static void free_fields(uint8_t **f, size_t n)
 {
     size_t i;
@@ -382,8 +339,6 @@ int es9_initiate_authentication(es9_client_t *c,
                                    "euiccCiPKIdToBeUsed", "serverCertificate" };
     uint8_t *f[4] = { NULL, NULL, NULL, NULL };
     size_t l[4] = { 0, 0, 0, 0 };
-    uint8_t *ok = NULL;
-    size_t ok_len = 0;
     int ret = -2, i;
 
     if (!c || !transaction_id_hex || !auth_server_req || !req_len) return -2;
@@ -428,49 +383,31 @@ int es9_initiate_authentication(es9_client_t *c,
         free(v);
     }
 
-    /* InitiateAuthenticationOkEs9 is a bare SEQUENCE, and its
-       transactionId is the first member -- carried here as hexadecimal
-       rather than base64, so it is put back as a TLV of its own. */
     {
         uint8_t *tid = NULL;
         size_t tid_len = 0;
-        uint8_t *all[5];
-        size_t alllen[5];
-        uint8_t *tidtlv = NULL;
-        size_t tidtlv_len = 0;
-        static const uint8_t T0[1] = { 0x80 };
-        static const uint8_t SEQ[1] = { 0x30 };
 
         if (es9_hex_decode(*transaction_id_hex, &tid, &tid_len) != 0) {
             note(c, "the transactionId is not hexadecimal");
             goto out;
         }
-        if (es9_wrap(T0, 1, &tid, &tid_len, 1, &tidtlv, &tidtlv_len) != 0) {
-            free(tid);
-            goto out;
-        }
+        ret = rsp_lpa_repack_authenticate_server_fields(
+                tid, tid_len,
+                f[0], l[0], f[1], l[1], f[2], l[2], f[3], l[3],
+                auth_server_req, req_len);
         free(tid);
-        all[0] = tidtlv; alllen[0] = tidtlv_len;
-        for (i = 0; i < 4; i++) { all[i + 1] = f[i]; alllen[i + 1] = l[i]; }
-        if (es9_wrap(SEQ, 1, all, alllen, 5, &ok, &ok_len) != 0) {
-            free(tidtlv);
-            goto out;
+        if (ret != 0) {
+            note(c, "euicc-lpa refused the fields the server sent");
         }
-        free(tidtlv);
+        goto out;
     }
 
-    ret = rsp_lpa_repack_authenticate_server(ok, ok_len, auth_server_req, req_len);
-    if (ret != 0) {
-        note(c, "the fields did not reassemble into an "
-                "InitiateAuthenticationOkEs9 the repacker accepts");
-    }
 
 out:
     free(chal);
     free(info);
     free(body);
     free(resp);
-    free(ok);
     free_fields(f, 4);
     return ret;
 }
@@ -484,8 +421,6 @@ int es9_authenticate_client(es9_client_t *c, const char *transaction_id_hex,
                                    "smdpSignature2", "smdpCertificate" };
     uint8_t *f[4] = { NULL, NULL, NULL, NULL };
     size_t l[4] = { 0, 0, 0, 0 };
-    uint8_t *ok = NULL, *choice = NULL;
-    size_t ok_len = 0, choice_len = 0;
     int ret = -2, i;
 
     if (!c || !transaction_id_hex || !prepare_download_req || !req_len) return -2;
@@ -520,57 +455,30 @@ int es9_authenticate_client(es9_client_t *c, const char *transaction_id_hex,
         free(v);
     }
 
-    /* AuthenticateClientResponseEs9 is the CHOICE, tag 'BF3B', around an
-       authenticateClientOk SEQUENCE -- two levels, unlike the first
-       function's bare SEQUENCE. */
     {
-        uint8_t *tid = NULL, *tidtlv = NULL;
-        size_t tid_len = 0, tidtlv_len = 0;
-        uint8_t *all[5];
-        size_t alllen[5];
-        static const uint8_t T0[1] = { 0x80 };
-        /* A0, not 30. rsp-2.5.asn is AUTOMATIC TAGS, and
-           AuthenticateClientResponseEs9's two alternatives carry no tags
-           of their own -- so X.680 numbers them, and authenticateClientOk
-           becomes [0] over a SEQUENCE, which is constructed context 0.
-           The first function's response never shows this because
-           euicc-rsp hands back its inner SEQUENCE rather than the CHOICE,
-           so the same reassembly is correct there with a plain 30. */
-        static const uint8_t OK_ARM[1] = { 0xa0 };
-        static const uint8_t BF3B[2] = { 0xbf, 0x3b };
+        uint8_t *tid = NULL;
+        size_t tid_len = 0;
 
         if (es9_hex_decode(transaction_id_hex, &tid, &tid_len) != 0) {
             note(c, "the transactionId is not hexadecimal");
             goto out;
         }
-        if (es9_wrap(T0, 1, &tid, &tid_len, 1, &tidtlv, &tidtlv_len) != 0) {
-            free(tid);
-            goto out;
-        }
+        ret = rsp_lpa_repack_prepare_download_fields(
+                tid, tid_len,
+                f[0], l[0], f[1], l[1], f[2], l[2], f[3], l[3],
+                prepare_download_req, req_len);
         free(tid);
-        all[0] = tidtlv; alllen[0] = tidtlv_len;
-        for (i = 0; i < 4; i++) { all[i + 1] = f[i]; alllen[i + 1] = l[i]; }
-        if (es9_wrap(OK_ARM, 1, all, alllen, 5, &ok, &ok_len) != 0) {
-            free(tidtlv);
-            goto out;
+        if (ret != 0) {
+            note(c, "euicc-lpa refused the fields the server sent");
         }
-        free(tidtlv);
-        if (es9_wrap(BF3B, 2, &ok, &ok_len, 1, &choice, &choice_len) != 0) goto out;
+        goto out;
     }
 
-    ret = rsp_lpa_repack_prepare_download(choice, choice_len,
-                                          prepare_download_req, req_len);
-    if (ret != 0) {
-        note(c, "the fields did not reassemble into an "
-                "AuthenticateClientResponseEs9 the repacker accepts");
-    }
 
 out:
     free(asr);
     free(body);
     free(resp);
-    free(ok);
-    free(choice);
     free_fields(f, 4);
     return ret;
 }
