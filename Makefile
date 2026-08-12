@@ -40,6 +40,17 @@ RSP_DIST := $(RSP)/dist
 RSP_MBED := $(RSP)/vendor/mbedtls
 RSP_MBED_LIBS := $(RSP_MBED)/library/libmbedcrypto.a $(RSP_MBED)/library/libmbedx509.a
 
+# The two mbedTLS options euicc-rsp builds its vendored copy with. They
+# add mutex members to mbedTLS contexts, so anything compiled against
+# those headers has to agree -- a mismatch is silent memory corruption,
+# not a link error. Repeated here rather than inherited, the same way
+# euicc-lpa repeats them.
+RSP_MBED_CFG := -DMBEDTLS_THREADING_C -DMBEDTLS_THREADING_PTHREAD
+
+# MBEDTLS_THREADING_PTHREAD needs pthread at link time: a no-op on
+# Darwin, not on Linux.
+RSP_MBED_LDLIBS := -pthread
+
 # PC/SC: macOS ships it as a framework, Linux needs pcsc-lite. The same
 # split euicc-lpa's own Makefile makes, repeated here because this binary
 # now links straight to a reader too, not only through liblpa.a. euicc-rsp
@@ -96,7 +107,7 @@ ifeq ($(shell uname -s),Darwin)
 EXTRA += -D_DARWIN_C_SOURCE
 endif
 
-ALL_CFLAGS = $(STD) $(WARN) $(CFLAGS) $(EXTRA) $(INC) $(DEF)
+ALL_CFLAGS = $(STD) $(WARN) $(CFLAGS) $(EXTRA) $(INC) $(DEF) $(RSP_MBED_CFG)
 
 OWN_SRCS := src/main.c src/schematron.c src/diff.c src/schema.c src/format.c src/card.c
 VN_SRCS  := $(wildcard $(VN)/src/*.c)
@@ -274,7 +285,7 @@ euicc: $(OWN_SRCS) src/euicc.h build/vn_annotations.c build/gen/.stamp \
 	    exit 1; }
 	$(CC) $(ALL_CFLAGS) -idirafter $(abspath $(DIST)) \
 	    $(OWN_SRCS) $(VN_SRCS) build/vn_annotations.c build/gen/*.o \
-	    build/libeuicc-full.a $(RSP_MBED_LIBS) $(RSP_PCSC_LIBS) \
+	    build/libeuicc-full.a $(RSP_MBED_LIBS) $(RSP_MBED_LDLIBS) $(RSP_PCSC_LIBS) \
 	    -o $@ $(XML_LIBS) -lm
 
 check: euicc

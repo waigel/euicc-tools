@@ -618,14 +618,19 @@ cmd_card_install(const char *path, const char *spn, const char *name,
        transactionId unique within the SM-DP+'s lifetime, explicitly to
        stop a CancelSession being replayed, and otSK.DP is a one-time key
        whose reuse would undo the forward secrecy the exchange exists
-       for. Both are parameters of rsp_lpa_install rather than values it
-       invents, so a test can pin them; here they must not be pinned. */
-    uint8_t transaction_id[16], otsk_dp[32];
+       for. serverChallenge is the third: the eUICC signs over it, so a
+       recorded one would let a captured AuthenticateServerResponse be
+       replayed against a fresh session. All three are parameters of
+       rsp_lpa_install rather than values it invents, so a test can pin
+       them; here they must not be pinned. */
+    uint8_t transaction_id[16], server_challenge[16], otsk_dp[32];
     {
         FILE *ur = fopen("/dev/urandom", "rb");
         int got = ur
             && fread(transaction_id, 1, sizeof transaction_id, ur)
                  == sizeof transaction_id
+            && fread(server_challenge, 1, sizeof server_challenge, ur)
+                 == sizeof server_challenge
             && fread(otsk_dp, 1, sizeof otsk_dp, ur) == sizeof otsk_dp;
         if(ur) fclose(ur);
         if(!got) {
@@ -661,8 +666,14 @@ cmd_card_install(const char *path, const char *spn, const char *name,
     uint8_t *result = NULL;
     size_t result_len = 0;
     int step = 0, no_isdr = 0, installed = 0;
+    /* Both roles are in this process, so there is one address and no
+       network between them. RFC 2606 reserves example.com for exactly
+       this: a name that is real enough to sign and can never resolve.
+       A download from a genuine SM-DP+ would carry that server's own
+       address here instead. */
     int rc = rsp_lpa_install(&t, upp, upp_len, metadata, metadata_len,
-                             transaction_id, otsk_dp, &result, &result_len,
+                             transaction_id, server_challenge, otsk_dp,
+                             "smdp.example.com", &result, &result_len,
                              &step, &no_isdr, &installed);
     t.close(&t);
     free(upp);
